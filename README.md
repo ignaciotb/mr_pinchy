@@ -1,4 +1,4 @@
-# Interface
+# Mavros interface
 Steps to setup the control of MrPinchy from ROS2.
 Launch mavros and set the GCS to ROS:
 ```
