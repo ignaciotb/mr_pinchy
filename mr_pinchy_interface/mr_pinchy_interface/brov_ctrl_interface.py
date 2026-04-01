@@ -77,6 +77,7 @@ class BrovTwistStampedTeleop(Node):
 
         self.declare_parameter("twist_topic", "/pinchy/cmd_vel")
         self.declare_parameter("arming_bool_topic", "/pinchy/arm")
+        self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom")
         self.declare_parameter("rc_topic", "/mavros/rc/override")
         self.declare_parameter("arming_service", "/mavros/cmd/arming")
         self.declare_parameter("publish_rate_hz", 20.0)
