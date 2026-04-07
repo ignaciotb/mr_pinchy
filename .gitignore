@@ -209,3 +209,6 @@ __marimo__/
 .vscode/
 log/
 output/
+
+sys_id/
+.codex

@@ -27,6 +27,7 @@ def generate_launch_description() -> LaunchDescription:
                 "odom_topic": "/mocap/mr_pinchy/odom",
                 "rc_topic": "/mavros/rc/override",
                 "map_frame": "map",
+                "base_link_frame": "mr_pinchy/base_link",
             }
         ],
     )

@@ -70,35 +70,28 @@ class PIDAxis:
         return out
 
 
-def acc_to_rc_channels(
+def thrust_factors_to_rc_channels(
     *,
-    ax: float,
-    ay: float,
-    az: float,
-    ayaw: float,
+    surge_factor: float,
+    sway_factor: float,
+    heave_factor: float,
+    yaw_factor: float,
     neutral: int,
     delta: int,
-    max_acc_x: float,
-    max_acc_y: float,
-    max_acc_z: float,
-    max_acc_yaw: float,
 ) -> list[int]:
-    """Map accel commands to 18 RC uint16 channels, with ch0/ch1 held neutral."""
+    """Map normalized thrust factors to 18 RC uint16 channels."""
 
-    def pwm_axis(val: float, vmax: float) -> int:
-        if vmax <= 1e-9:
-            return neutral
-        s = _clamp(val / vmax, -1.0, 1.0)
-        return int(round(neutral + s * delta))
+    def pwm_axis(factor: float) -> int:
+        return int(round(neutral + factor * delta))
 
     nc = OverrideRCIn.CHAN_NOCHANGE
     ch = [nc] * 18
     ch[0] = neutral  # pitch unused
     ch[1] = neutral  # roll unused
-    ch[2] = pwm_axis(az, max_acc_z)  # vertical
-    ch[3] = pwm_axis(-ayaw, max_acc_yaw)  # yaw (match teleop: yaw_left -> negative PWM)
-    ch[4] = pwm_axis(ax, max_acc_x)  # forward
-    ch[5] = pwm_axis(-ay, max_acc_y)  # lateral (match teleop: left -> negative PWM)
+    ch[2] = pwm_axis(heave_factor)  # vertical
+    ch[3] = pwm_axis(-yaw_factor)  # yaw (match teleop: yaw_left -> negative PWM)
+    ch[4] = pwm_axis(surge_factor)  # forward
+    ch[5] = pwm_axis(-sway_factor)  # lateral (match teleop: left -> negative PWM)
     return ch
 
 
@@ -111,35 +104,6 @@ class BrovCtrlPID(Node):
         self.declare_parameter("rc_topic", "/mavros/rc/override")
         self.declare_parameter("map_frame", "map")
         self.declare_parameter("base_link_frame", "mr_pinchy/base_link")
-        self.declare_parameter("debug_log", True)
-        self.declare_parameter("publish_rate_hz", 20.0)
-        self.declare_parameter("odom_timeout_sec", 0.3)
-        self.declare_parameter("neutral_pwm", 1500)
-        self.declare_parameter("delta_pwm", 100)
-
-        self.declare_parameter("kp_x", 1.0)
-        self.declare_parameter("ki_x", 0.0)
-        self.declare_parameter("kd_x", 0.0)
-        self.declare_parameter("i_limit_x", 1.0)
-        self.declare_parameter("max_acc_x", 1.0)
-
-        self.declare_parameter("kp_y", 1.0)
-        self.declare_parameter("ki_y", 0.0)
-        self.declare_parameter("kd_y", 0.0)
-        self.declare_parameter("i_limit_y", 1.0)
-        self.declare_parameter("max_acc_y", 1.0)
-
-        self.declare_parameter("kp_z", 1.0)
-        self.declare_parameter("ki_z", 0.0)
-        self.declare_parameter("kd_z", 0.0)
-        self.declare_parameter("i_limit_z", 1.0)
-        self.declare_parameter("max_acc_z", 1.0)
-
-        self.declare_parameter("kp_yaw", 1.0)
-        self.declare_parameter("ki_yaw", 0.0)
-        self.declare_parameter("kd_yaw", 0.0)
-        self.declare_parameter("i_limit_yaw", 1.0)
-        self.declare_parameter("max_acc_yaw", 1.0)
 
         goal_topic = self.get_parameter("goal_topic").get_parameter_value().string_value
         odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
@@ -148,40 +112,23 @@ class BrovCtrlPID(Node):
         self._base_link_frame = (
             self.get_parameter("base_link_frame").get_parameter_value().string_value
         )
-        self._debug_log = self.get_parameter("debug_log").get_parameter_value().bool_value
 
-        rate_hz = self.get_parameter("publish_rate_hz").get_parameter_value().double_value
-        if rate_hz <= 0.0:
-            rate_hz = 20.0
-        self._period = 1.0 / rate_hz
+        self._debug_log = True
+        self._publish_rate_hz = 20.0
+        self._period = 1.0 / self._publish_rate_hz
+        self._odom_timeout = 0.3
+        self._neutral = 1500
+        self._delta = 100
 
-        self._odom_timeout = float(
-            self.get_parameter("odom_timeout_sec").get_parameter_value().double_value
-        )
-        if self._odom_timeout <= 0.0:
-            self._odom_timeout = 0.3
-
-        self._neutral = int(
-            self.get_parameter("neutral_pwm").get_parameter_value().integer_value
-        )
-        if self._neutral <= 0:
-            self._neutral = 1500
-
-        self._delta = int(self.get_parameter("delta_pwm").get_parameter_value().integer_value)
-        if self._delta <= 0:
-            self._delta = 100
-
-        self._max_acc_x = float(
-            self.get_parameter("max_acc_x").get_parameter_value().double_value
-        )
-        self._max_acc_y = float(
-            self.get_parameter("max_acc_y").get_parameter_value().double_value
-        )
-        self._max_acc_z = float(
-            self.get_parameter("max_acc_z").get_parameter_value().double_value
-        )
-        self._max_acc_yaw = float(
-            self.get_parameter("max_acc_yaw").get_parameter_value().double_value
+        self._pid_x = PIDAxis(kp=1.0, ki=0.0, kd=0.0, integral_limit=1.0, output_limit=1.0)
+        self._pid_y = PIDAxis(kp=1.0, ki=0.0, kd=0.0, integral_limit=1.0, output_limit=1.0)
+        self._pid_z = PIDAxis(kp=1.0, ki=0.0, kd=0.0, integral_limit=1.0, output_limit=1.0)
+        self._pid_yaw = PIDAxis(
+            kp=1.0,
+            ki=0.0,
+            kd=0.0,
+            integral_limit=1.0,
+            output_limit=1.0,
         )
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
@@ -197,48 +144,11 @@ class BrovCtrlPID(Node):
         self._last_tick_sec: float = time.monotonic()
         self._yaw_err_unwrapped: float | None = None
 
-        self._pid_x = PIDAxis(
-            kp=float(self.get_parameter("kp_x").get_parameter_value().double_value),
-            ki=float(self.get_parameter("ki_x").get_parameter_value().double_value),
-            kd=float(self.get_parameter("kd_x").get_parameter_value().double_value),
-            integral_limit=float(
-                self.get_parameter("i_limit_x").get_parameter_value().double_value
-            ),
-            output_limit=self._max_acc_x,
-        )
-        self._pid_y = PIDAxis(
-            kp=float(self.get_parameter("kp_y").get_parameter_value().double_value),
-            ki=float(self.get_parameter("ki_y").get_parameter_value().double_value),
-            kd=float(self.get_parameter("kd_y").get_parameter_value().double_value),
-            integral_limit=float(
-                self.get_parameter("i_limit_y").get_parameter_value().double_value
-            ),
-            output_limit=self._max_acc_y,
-        )
-        self._pid_z = PIDAxis(
-            kp=float(self.get_parameter("kp_z").get_parameter_value().double_value),
-            ki=float(self.get_parameter("ki_z").get_parameter_value().double_value),
-            kd=float(self.get_parameter("kd_z").get_parameter_value().double_value),
-            integral_limit=float(
-                self.get_parameter("i_limit_z").get_parameter_value().double_value
-            ),
-            output_limit=self._max_acc_z,
-        )
-        self._pid_yaw = PIDAxis(
-            kp=float(self.get_parameter("kp_yaw").get_parameter_value().double_value),
-            ki=float(self.get_parameter("ki_yaw").get_parameter_value().double_value),
-            kd=float(self.get_parameter("kd_yaw").get_parameter_value().double_value),
-            integral_limit=float(
-                self.get_parameter("i_limit_yaw").get_parameter_value().double_value
-            ),
-            output_limit=self._max_acc_yaw,
-        )
-
         self.create_timer(self._period, self._tick)
         self.get_logger().info(
             f"brov_ctrl_pid: goal='{goal_topic}', odom='{odom_topic}', rc='{rc_topic}', "
             f"map_frame='{self._map_frame}', base_link_frame='{self._base_link_frame}', "
-            f"rate={rate_hz:.1f}Hz, odom_timeout={self._odom_timeout:.2f}s"
+            f"rate={self._publish_rate_hz:.1f}Hz, odom_timeout={self._odom_timeout:.2f}s"
         )
 
     def _goal_cb(self, msg: PoseStamped) -> None:
@@ -333,32 +243,28 @@ class BrovCtrlPID(Node):
         self._yaw_err_unwrapped = _unwrap_angle(eyaw_wrapped, self._yaw_err_unwrapped)
         eyaw = self._yaw_err_unwrapped
 
-        ax_body = self._pid_x.step(ex, dt)
-        ay_body = self._pid_y.step(ey, dt)
-        az_body = self._pid_z.step(ez, dt)
-        # ayaw = self._pid_yaw.step(eyaw, dt)
-        ayaw = 0.0
+        surge_factor = self._pid_x.step(ex, dt)
+        sway_factor = self._pid_y.step(ey, dt)
+        heave_factor = self._pid_z.step(ez, dt)
+        yaw_factor = self._pid_yaw.step(eyaw, dt)
 
         if self._debug_log:
             self.get_logger().info(
                 f"err_body=({ex:.3f}, {ey:.3f}, {ez:.3f}) eyaw={eyaw:.3f} "
-                f"acc_body=({ax_body:.3f}, {ay_body:.3f}, {az_body:.3f}) ayaw={ayaw:.3f}"
+                "thrust_factors="
+                f"({surge_factor:.3f}, {sway_factor:.3f}, {heave_factor:.3f}) "
+                f"yaw_factor={yaw_factor:.3f}"
             )
 
         msg = OverrideRCIn()
-        msg.channels = acc_to_rc_channels(
-            ax=ax_body,
-            ay=ay_body,
-            az=az_body,
-            ayaw=ayaw,
+        msg.channels = thrust_factors_to_rc_channels(
+            surge_factor=surge_factor,
+            sway_factor=sway_factor,
+            heave_factor=heave_factor,
+            yaw_factor=yaw_factor,
             neutral=self._neutral,
             delta=self._delta,
-            max_acc_x=self._max_acc_x,
-            max_acc_y=self._max_acc_y,
-            max_acc_z=self._max_acc_z,
-            max_acc_yaw=self._max_acc_yaw,
         )
-        self.get_logger().info(f"msg: {msg}")  
         self._rc_pub.publish(msg)
 
 
