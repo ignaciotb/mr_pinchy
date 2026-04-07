@@ -18,7 +18,7 @@ def generate_launch_description() -> LaunchDescription:
 
     pid_node = Node(
         package="mr_pinchy_interface",
-        executable="brov_ctrl_pid",
+        executable="brov_ctrl_pid_wrench",
         name="brov_ctrl_pid",
         output="screen",
         parameters=[

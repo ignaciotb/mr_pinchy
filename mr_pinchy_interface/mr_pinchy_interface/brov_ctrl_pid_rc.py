@@ -93,19 +93,32 @@ def thrust_factors_to_rc_channels(
     neutral: int,
     delta: int,
 ) -> list[int]:
-    """Map normalized thrust factors to 18 RC uint16 channels."""
+    """Map body-FRD control factors to ArduSub RC override channels.
+
+    The PID loop runs on errors expressed in ``base_link`` which is body ``FRD``:
+      +X forward, +Y right, +Z down
+
+    RC override uses pilot-stick semantics instead:
+      throttle positive -> up
+      yaw positive -> right
+      lateral positive -> right
+      pitch positive -> nose up
+      roll positive -> right wing down
+
+    That means the FRD pitch and heave axes need sign flips before publishing RC.
+    """
 
     def pwm_axis(factor: float) -> int:
         return int(round(neutral + factor * delta))
 
     nc = OverrideRCIn.CHAN_NOCHANGE
     ch = [nc] * 18
-    ch[0] = pwm_axis(pitch_factor)  # pitch
-    ch[1] = pwm_axis(roll_factor)  # roll
-    ch[2] = pwm_axis(heave_factor)  # vertical
-    ch[3] = pwm_axis(-yaw_factor)  # yaw (match teleop: yaw_left -> negative PWM)
+    ch[0] = pwm_axis(-pitch_factor)  # FRD +pitch is nose-down; RC +pitch is nose-up
+    ch[1] = pwm_axis(roll_factor)  # FRD +roll matches RC +roll_right
+    ch[2] = pwm_axis(-heave_factor)  # FRD +heave is down; RC +throttle is up
+    ch[3] = pwm_axis(yaw_factor)  # FRD +yaw matches RC +yaw_right
     ch[4] = pwm_axis(surge_factor)  # forward
-    ch[5] = pwm_axis(-sway_factor)  # lateral (match teleop: left -> negative PWM)
+    ch[5] = pwm_axis(sway_factor)  # FRD +sway matches RC +right
     return ch
 
 
@@ -304,7 +317,7 @@ class BrovCtrlPID(Node):
 
         if self._debug_log:
             self.get_logger().info(
-                f"err_body=({ex:.3f}, {ey:.3f}, {ez:.3f}) "
+                f"err_body_frd=({ex:.3f}, {ey:.3f}, {ez:.3f}) "
                 f"eyaw={eyaw:.3f} epitch={epitch:.3f} eroll={eroll:.3f} "
                 "thrust_factors="
                 f"({surge_factor:.3f}, {sway_factor:.3f}, {heave_factor:.3f}) "

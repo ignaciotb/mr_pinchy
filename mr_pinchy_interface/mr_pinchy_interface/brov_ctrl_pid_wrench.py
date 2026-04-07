@@ -166,9 +166,9 @@ class BrovCtrlPIDWrench(Node):
         self._map_frame = "map"
         self._base_link_frame = "mr_pinchy/base_link"
         self._neutral_pwm = 1500
-        self._force_x_scale = 1.0
-        self._force_y_scale = 1.0
-        self._force_z_scale = 1.0
+        self._force_x_scale = 10.0
+        self._force_y_scale = 10.0
+        self._force_z_scale = 10.0
         self._torque_x_scale = 1.0
         self._torque_y_scale = 1.0
         self._torque_z_scale = 1.0
@@ -227,10 +227,6 @@ class BrovCtrlPIDWrench(Node):
     def _goal_cb(self, msg: PoseStamped) -> None:
         self._goal_pose = msg
         self._goal_pose.pose.position.z = -2.0
-        self._goal_pose.pose.orientation.x = 0.0
-        self._goal_pose.pose.orientation.y = 0.0
-        self._goal_pose.pose.orientation.z = 0.0
-        self._goal_pose.pose.orientation.w = 1.0
 
     def _odom_cb(self, _msg: Odometry) -> None:
         # Odom is used as a freshness watchdog so control is neutralized on stream loss.
