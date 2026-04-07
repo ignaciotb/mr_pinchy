@@ -6,11 +6,9 @@ import numpy as np
 from geometry_msgs.msg import WrenchStamped
 from mavros_msgs.msg import OverrideRCIn
 
-# from mr_pinchy_interface.px4_wrench_allocator import (
-#     build_bluerov2_heavy_effectiveness_matrix,
-# )
-from mr_pinchy_interface.mr_pinchy_interface.px4_wrench_allocator import build_bluerov2_heavy_effectiveness_matrix
-
+from mr_pinchy_interface.px4_wrench_allocator import (
+    build_bluerov2_heavy_effectiveness_matrix,
+)
 
 _DEFAULT_MOTOR_DIRECTION_SIGNS = (-1, -1, 1, 1, -1, 1, 1, -1)
 

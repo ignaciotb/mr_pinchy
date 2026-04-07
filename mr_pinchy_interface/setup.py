@@ -19,7 +19,7 @@ setup(
         ),
         (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'cvxpy', 'osqp'],
     zip_safe=True,
     maintainer='nacho',
     maintainer_email='ignaciotorroba@hotmail.com',
@@ -41,7 +41,8 @@ setup(
                 'mr_pinchy_interface.brov_ctrl_interface:main'
             ),
             'brov_ctrl_pid = mr_pinchy_interface.brov_ctrl_pid:main',
-            'data_process = mr_pinchy_interface.data_process:main',
+            'brov_ctrl_pid_wrench = mr_pinchy_interface.brov_ctrl_pid_wrench:main',
+            'brov_ctrl_clfqp_wrench = mr_pinchy_interface.brov_ctrl_clfqp_wrench:main',
         ],
     },
 )

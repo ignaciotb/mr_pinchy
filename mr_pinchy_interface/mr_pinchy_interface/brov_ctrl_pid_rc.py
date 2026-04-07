@@ -30,6 +30,18 @@ def _yaw_from_quat(x: float, y: float, z: float, w: float) -> float:
     return math.atan2(siny_cosp, cosy_cosp)
 
 
+def _pitch_from_quat(x: float, y: float, z: float, w: float) -> float:
+    sinp = 2.0 * (w * y - z * x)
+    sinp = _clamp(sinp, -1.0, 1.0)
+    return math.asin(sinp)
+
+
+def _roll_from_quat(x: float, y: float, z: float, w: float) -> float:
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    return math.atan2(sinr_cosp, cosr_cosp)
+
+
 def _unwrap_angle(curr_wrapped: float, prev_unwrapped: float | None) -> float:
     """Keep angular signal continuous across the -pi/pi branch cut."""
     if prev_unwrapped is None:
@@ -76,6 +88,8 @@ def thrust_factors_to_rc_channels(
     sway_factor: float,
     heave_factor: float,
     yaw_factor: float,
+    pitch_factor: float,
+    roll_factor: float,
     neutral: int,
     delta: int,
 ) -> list[int]:
@@ -86,8 +100,8 @@ def thrust_factors_to_rc_channels(
 
     nc = OverrideRCIn.CHAN_NOCHANGE
     ch = [nc] * 18
-    ch[0] = neutral  # pitch unused
-    ch[1] = neutral  # roll unused
+    ch[0] = pwm_axis(pitch_factor)  # pitch
+    ch[1] = pwm_axis(roll_factor)  # roll
     ch[2] = pwm_axis(heave_factor)  # vertical
     ch[3] = pwm_axis(-yaw_factor)  # yaw (match teleop: yaw_left -> negative PWM)
     ch[4] = pwm_axis(surge_factor)  # forward
@@ -130,6 +144,20 @@ class BrovCtrlPID(Node):
             integral_limit=1.0,
             output_limit=1.0,
         )
+        self._pid_pitch = PIDAxis(
+            kp=1.0,
+            ki=0.0,
+            kd=0.0,
+            integral_limit=1.0,
+            output_limit=1.0,
+        )
+        self._pid_roll = PIDAxis(
+            kp=1.0,
+            ki=0.0,
+            kd=0.0,
+            integral_limit=1.0,
+            output_limit=1.0,
+        )
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self._rc_pub = self.create_publisher(OverrideRCIn, rc_topic, qos)
@@ -143,6 +171,8 @@ class BrovCtrlPID(Node):
         self._last_odom_rx_sec: float = 0.0
         self._last_tick_sec: float = time.monotonic()
         self._yaw_err_unwrapped: float | None = None
+        self._pitch_err_unwrapped: float | None = None
+        self._roll_err_unwrapped: float | None = None
 
         self.create_timer(self._period, self._tick)
         self.get_logger().info(
@@ -154,6 +184,17 @@ class BrovCtrlPID(Node):
     def _goal_cb(self, msg: PoseStamped) -> None:
         self._goal_pose = msg
         self._goal_pose.pose.position.z = -2.0
+        # Zero out pitch and roll — keep only yaw in the goal orientation.
+        yaw = _yaw_from_quat(
+            msg.pose.orientation.x,
+            msg.pose.orientation.y,
+            msg.pose.orientation.z,
+            msg.pose.orientation.w,
+        )
+        self._goal_pose.pose.orientation.x = 0.0
+        self._goal_pose.pose.orientation.y = 0.0
+        self._goal_pose.pose.orientation.z = math.sin(yaw / 2.0)
+        self._goal_pose.pose.orientation.w = math.cos(yaw / 2.0)
 
     def _odom_cb(self, _msg: Odometry) -> None:
         # Odom is used as a freshness watchdog so control is neutralized on stream loss.
@@ -192,7 +233,11 @@ class BrovCtrlPID(Node):
         self._pid_y.reset()
         self._pid_z.reset()
         self._pid_yaw.reset()
+        self._pid_pitch.reset()
+        self._pid_roll.reset()
         self._yaw_err_unwrapped = None
+        self._pitch_err_unwrapped = None
+        self._roll_err_unwrapped = None
 
     def _publish_neutral(self) -> None:
         msg = OverrideRCIn()
@@ -233,27 +278,37 @@ class BrovCtrlPID(Node):
         ey = goal.position.y
         ez = goal.position.z
 
-        yaw_goal = _yaw_from_quat(
-            goal.orientation.x,
-            goal.orientation.y,
-            goal.orientation.z,
-            goal.orientation.w,
-        )
-        eyaw_wrapped = _wrap_pi(yaw_goal)
+        qx = goal.orientation.x
+        qy = goal.orientation.y
+        qz = goal.orientation.z
+        qw = goal.orientation.w
+
+        eyaw_wrapped = _wrap_pi(_yaw_from_quat(qx, qy, qz, qw))
         self._yaw_err_unwrapped = _unwrap_angle(eyaw_wrapped, self._yaw_err_unwrapped)
         eyaw = self._yaw_err_unwrapped
+
+        epitch_wrapped = _wrap_pi(_pitch_from_quat(qx, qy, qz, qw))
+        self._pitch_err_unwrapped = _unwrap_angle(epitch_wrapped, self._pitch_err_unwrapped)
+        epitch = self._pitch_err_unwrapped
+
+        eroll_wrapped = _wrap_pi(_roll_from_quat(qx, qy, qz, qw))
+        self._roll_err_unwrapped = _unwrap_angle(eroll_wrapped, self._roll_err_unwrapped)
+        eroll = self._roll_err_unwrapped
 
         surge_factor = self._pid_x.step(ex, dt)
         sway_factor = self._pid_y.step(ey, dt)
         heave_factor = self._pid_z.step(ez, dt)
         yaw_factor = self._pid_yaw.step(eyaw, dt)
+        pitch_factor = self._pid_pitch.step(epitch, dt)
+        roll_factor = self._pid_roll.step(eroll, dt)
 
         if self._debug_log:
             self.get_logger().info(
-                f"err_body=({ex:.3f}, {ey:.3f}, {ez:.3f}) eyaw={eyaw:.3f} "
+                f"err_body=({ex:.3f}, {ey:.3f}, {ez:.3f}) "
+                f"eyaw={eyaw:.3f} epitch={epitch:.3f} eroll={eroll:.3f} "
                 "thrust_factors="
                 f"({surge_factor:.3f}, {sway_factor:.3f}, {heave_factor:.3f}) "
-                f"yaw_factor={yaw_factor:.3f}"
+                f"yaw={yaw_factor:.3f} pitch={pitch_factor:.3f} roll={roll_factor:.3f}"
             )
 
         msg = OverrideRCIn()
@@ -262,6 +317,8 @@ class BrovCtrlPID(Node):
             sway_factor=sway_factor,
             heave_factor=heave_factor,
             yaw_factor=yaw_factor,
+            pitch_factor=pitch_factor,
+            roll_factor=roll_factor,
             neutral=self._neutral,
             delta=self._delta,
         )
