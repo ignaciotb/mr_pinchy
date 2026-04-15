@@ -26,6 +26,6 @@ ros2 run gscam gscam_node \
 ```
 ## To stream the HD payload camera, run in Pinchy:
 ```
-./mavlink-camera-manager-aarch64 --mavlink=udpout:192.168.32.112:5600 --verbose
+./mavlink-camera-manager-aarch64 --mavlink=udpout:0.0.0.0:14000 --verbose
 ```
 You can then check the stream and camera controls in http://192.168.32.116:6020/
