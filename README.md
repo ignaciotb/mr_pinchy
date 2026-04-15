@@ -1,4 +1,4 @@
-# Mavros interface
+# Mavros interface for uplink control
 Steps to setup the control of MrPinchy from ROS2.
 Launch mavros and set the GCS to ROS:
 ```
@@ -14,3 +14,18 @@ Run one of the interfaces in mr_pinchy_interface to map a controller output to m
 ```
 ros2 run mr_pinchy_interface brov_ctrl_interface
 ```
+
+# Video
+## To stream the onboard USB cam into ROS2 in your uplink PC, run:
+```
+ros2 run gscam gscam_node \
+  --ros-args \
+  -p gscam_config:="udpsrc port=5600 ! application/x-rtp,payload=96 ! rtph264depay ! avdec_h264 ! videoconvert" \
+  -p frame_id:=camera \
+  -r __ns:=/mr_pinchy/main
+```
+## To stream the HD payload camera, run in Pinchy:
+```
+./mavlink-camera-manager-aarch64 --mavlink=udpout:192.168.32.112:5600 --verbose
+```
+You can then check the stream and camera controls in http://192.168.32.116:6020/
