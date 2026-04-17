@@ -1,3 +1,7 @@
+# Basics
+Once the vehicle is on, you can access Blueos here http://192.168.32.110/
+Then start cockpit and you're good to drive. 
+
 # Mavros interface for uplink control
 Steps to setup the control of MrPinchy from ROS2.
 Launch mavros and set the GCS to ROS:
