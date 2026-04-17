@@ -6,7 +6,7 @@ import numpy as np
 from geometry_msgs.msg import WrenchStamped
 from mavros_msgs.msg import OverrideRCIn
 
-from mr_pinchy_interface.px4_wrench_allocator import (
+from mr_pinchy.mr_pinchy_interface.doc.px4_wrench_allocator import (
     build_bluerov2_heavy_effectiveness_matrix,
 )
 

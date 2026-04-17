@@ -46,7 +46,7 @@ sys.modules["mavros_msgs.msg"] = mavros_msgs_msg
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mr_pinchy_interface.brov_ctrl_wrench import wrench_to_rc_override
+from mr_pinchy.mr_pinchy_interface.mr_pinchy_interface.brov_wrench_to_pwm import wrench_to_rc_override
 
 
 def _make_wrench(

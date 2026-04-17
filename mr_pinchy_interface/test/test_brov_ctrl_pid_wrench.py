@@ -173,7 +173,7 @@ sys.modules["tf2_ros"] = tf2_ros
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mr_pinchy_interface.brov_ctrl_pid_wrench import (
+from mr_pinchy.mr_pinchy_interface.mr_pinchy_interface.brov_ctrl_waypoint import (
     PIDAxis,
     _rpy_from_quat,
     _wrap_pi,
@@ -181,7 +181,7 @@ from mr_pinchy_interface.brov_ctrl_pid_wrench import (
     neutral_rc_override,
     pid_outputs_to_wrench,
 )
-from mr_pinchy_interface.brov_ctrl_wrench import wrench_to_rc_override
+from mr_pinchy.mr_pinchy_interface.mr_pinchy_interface.brov_wrench_to_pwm import wrench_to_rc_override
 
 
 def test_pid_outputs_to_wrench_applies_axis_scales() -> None:

@@ -15,7 +15,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from tf2_geometry_msgs import do_transform_pose_stamped
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from mr_pinchy_interface.brov_ctrl_wrench import wrench_to_rc_override
+from mr_pinchy_interface.brov_wrench_to_pwm import wrench_to_rc_override
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -166,9 +166,9 @@ class BrovCtrlPIDWrench(Node):
         self._map_frame = "map"
         self._base_link_frame = "mr_pinchy/base_link"
         self._neutral_pwm = 1500
-        self._force_x_scale = 10.0
-        self._force_y_scale = 10.0
-        self._force_z_scale = 10.0
+        self._force_x_scale = 20.0
+        self._force_y_scale = 20.0
+        self._force_z_scale = 20.0
         self._torque_x_scale = 1.0
         self._torque_y_scale = 1.0
         self._torque_z_scale = 1.0
@@ -178,9 +178,9 @@ class BrovCtrlPIDWrench(Node):
         self._period = 1.0 / self._publish_rate_hz
         self._odom_timeout = 0.3
 
-        self._pid_x = PIDAxis(kp=1.0, ki=0.0, kd=0.0, integral_limit=1.0, output_limit=1.0)
-        self._pid_y = PIDAxis(kp=1.0, ki=0.0, kd=0.0, integral_limit=1.0, output_limit=1.0)
-        self._pid_z = PIDAxis(kp=1.0, ki=0.0, kd=0.0, integral_limit=1.0, output_limit=1.0)
+        self._pid_x = PIDAxis(kp=3.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0)
+        self._pid_y = PIDAxis(kp=3.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0)
+        self._pid_z = PIDAxis(kp=1.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0)
         self._pid_roll = PIDAxis(
             kp=1.0,
             ki=0.0,
@@ -196,9 +196,9 @@ class BrovCtrlPIDWrench(Node):
             output_limit=1.0,
         )
         self._pid_yaw = PIDAxis(
-            kp=1.0,
+            kp=3.0,
             ki=0.0,
-            kd=0.0,
+            kd=0.1,
             integral_limit=1.0,
             output_limit=1.0,
         )
@@ -239,6 +239,11 @@ class BrovCtrlPIDWrench(Node):
         src = PoseStamped()
         src.header = self._goal_pose.header
         src.pose = self._goal_pose.pose
+        self.get_logger().info(f"Received new goal pose: frame_id='{src.header.frame_id}', "
+            f"position=({src.pose.position.x:.3f}, {src.pose.position.y:.3f}, {src.pose.position.z:.3f}), "
+            f"orientation=({src.pose.orientation.x:.3f}, {src.pose.orientation.y:.3f}, {src.pose.orientation.z:.3f}, {src.pose.orientation.w:.3f})")
+
+
         if not src.header.frame_id:
             src.header.frame_id = self._map_frame
 
@@ -252,6 +257,26 @@ class BrovCtrlPIDWrench(Node):
                 rclpy.time.Time(),
                 timeout=Duration(seconds=0.05),
             )
+            try:
+                base_link_in_map = self._tf_buffer.lookup_transform(
+                    self._map_frame,
+                    self._base_link_frame,
+                    rclpy.time.Time(),
+                    timeout=Duration(seconds=0.05),
+                )
+                translation = base_link_in_map.transform.translation
+                rotation = base_link_in_map.transform.rotation
+                self.get_logger().info(
+                    f"base_link in {self._map_frame}: "
+                    f"position=({translation.x:.3f}, {translation.y:.3f}, {translation.z:.3f}), "
+                    f"orientation=({rotation.x:.3f}, {rotation.y:.3f}, {rotation.z:.3f}, {rotation.w:.3f})"
+                )
+            except TransformException as exc:
+                self.get_logger().warn(
+                    f"TF {self._base_link_frame} -> {self._map_frame} unavailable: {exc}",
+                    throttle_duration_sec=2.0,
+                )
+
             return do_transform_pose_stamped(src, tf)
         except TransformException as exc:
             self.get_logger().warn(
@@ -341,6 +366,11 @@ class BrovCtrlPIDWrench(Node):
             stamp=stamp,
         )
 
+        rc_msg = wrench_to_rc_override(
+            wrench_msg,
+            delta_pwm=150,
+        )
+
         if self._debug_log:
             self.get_logger().info(
                 f"err_body=({ex:.3f}, {ey:.3f}, {ez:.3f}) "
@@ -352,11 +382,10 @@ class BrovCtrlPIDWrench(Node):
                 f"(Fx={wrench_msg.wrench.force.x:.3f}, Fy={wrench_msg.wrench.force.y:.3f}, "
                 f"Fz={wrench_msg.wrench.force.z:.3f}, Tx={wrench_msg.wrench.torque.x:.3f}, "
                 f"Ty={wrench_msg.wrench.torque.y:.3f}, Tz={wrench_msg.wrench.torque.z:.3f})"
+                " rc="
+                f"({rc_msg.channels[0]}, {rc_msg.channels[1]}, {rc_msg.channels[2]}, {rc_msg.channels[3]}, {rc_msg.channels[4]}, {rc_msg.channels[5]})"
             )
 
-        rc_msg = wrench_to_rc_override(
-            wrench_msg,
-        )
         self._publish_wrench_and_rc(wrench_msg, rc_msg)
 
 

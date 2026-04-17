@@ -42,6 +42,7 @@ setup(
             ),
             'brov_ctrl_pid = mr_pinchy_interface.brov_ctrl_pid_rc:main',
             'brov_ctrl_pid_wrench = mr_pinchy_interface.brov_ctrl_pid_wrench:main',
+            'brov_ctrl_si_wrench = mr_pinchy_interface.brov_ctrl_si_wrench:main',
             'brov_ctrl_clfqp_wrench = mr_pinchy_interface.brov_ctrl_clfqp_wrench:main',
         ],
     },
