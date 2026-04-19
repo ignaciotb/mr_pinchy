@@ -7,10 +7,7 @@ import time
 import numpy as np
 import rclpy
 from geometry_msgs.msg import (
-    PoseStamped,
-    TransformStamped,
     TwistStamped,
-    Vector3Stamped,
     WrenchStamped,
 )
 from mavros_msgs.msg import OverrideRCIn
@@ -24,33 +21,14 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from mr_pinchy_interface.brov_dynamics import bluerov2_model_terms
 from mr_pinchy_interface.brov_utils import (
     body_wrench_message,
-    clamp,
-    odom_to_body_state,
     pose_rpy_in_ned,
     pose_stamped_from_pose,
     pose_stamped_from_transform,
-    quat_to_rotation_matrix,
-    quat_to_rpy,
-    rpy_from_rotation_matrix,
     transform_from_pose,
-    twist_to_body_velocity,
     vector3_stamped,
     vector3_to_array,
-    world_to_ned_rotation,
     wrench_to_rc_override,
 )
-
-_clamp = clamp
-_quat_to_rpy = quat_to_rpy
-_quat_to_rotation_matrix = quat_to_rotation_matrix
-_rpy_from_rotation_matrix = rpy_from_rotation_matrix
-_world_to_ned_rotation = world_to_ned_rotation
-_pose_rpy_in_ned = pose_rpy_in_ned
-_vector3_to_array = vector3_to_array
-_vector3_stamped = vector3_stamped
-_pose_stamped_from_pose = pose_stamped_from_pose
-_pose_stamped_from_transform = pose_stamped_from_transform
-_transform_from_pose = transform_from_pose
 
 
 def static_wrench_feedforward(eta: np.ndarray, nu_ref: np.ndarray) -> np.ndarray:
@@ -189,7 +167,7 @@ class BrovTwistController(Node):
         stamp=None,
     ) -> np.ndarray | None:
         if source_frame == self._base_link_frame:
-            return _vector3_to_array(msg)
+            return vector3_to_array(msg)
 
         try:
             transform = self._lookup_transform(self._base_link_frame, source_frame)
@@ -200,9 +178,9 @@ class BrovTwistController(Node):
             )
             return None
 
-        vector = _vector3_stamped(msg, frame_id=source_frame, stamp=stamp)
+        vector = vector3_stamped(msg, frame_id=source_frame, stamp=stamp)
         transformed = do_transform_vector3(vector, copy.deepcopy(transform))
-        return _vector3_to_array(transformed.vector)
+        return vector3_to_array(transformed.vector)
 
     def _odom_in_base_link(self, odom: Odometry) -> tuple[np.ndarray, np.ndarray] | None:
         source_frame = getattr(odom, "child_frame_id", "")
@@ -212,14 +190,14 @@ class BrovTwistController(Node):
         stamp = getattr(getattr(odom, "header", None), "stamp", None)
 
         if source_frame == self._base_link_frame:
-            pose_in_world = _pose_stamped_from_pose(
+            pose_in_world = pose_stamped_from_pose(
                 odom.pose.pose,
                 frame_id=world_frame,
                 stamp=stamp,
             )
         else:
             try:
-                base_in_source = _pose_stamped_from_transform(
+                base_in_source = pose_stamped_from_transform(
                     self._lookup_transform(source_frame, self._base_link_frame)
                 )
             except TransformException as exc:
@@ -229,7 +207,7 @@ class BrovTwistController(Node):
                 )
                 return None
 
-            odom_transform = _transform_from_pose(
+            odom_transform = transform_from_pose(
                 odom.pose.pose,
                 target_frame=world_frame,
                 source_frame=source_frame,
@@ -250,7 +228,7 @@ class BrovTwistController(Node):
         if linear is None or angular is None:
             return None
 
-        roll, pitch, yaw = _pose_rpy_in_ned(pose_in_world.pose, world_frame=world_frame)
+        roll, pitch, yaw = pose_rpy_in_ned(pose_in_world.pose, world_frame=world_frame)
         # eta in NED world and nu in FRD body
         eta = np.array(
             [
@@ -345,10 +323,6 @@ class BrovTwistController(Node):
             return
 
         self._publish_wrench_and_rc(tau)
-
-
-BrovCtrlSIWrench = BrovTwistController
-
 
 def main(args=None) -> None:
     rclpy.init(args=args)
