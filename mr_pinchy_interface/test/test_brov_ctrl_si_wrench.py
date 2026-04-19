@@ -57,6 +57,18 @@ class TwistStamped:
         self.twist = _Twist()
 
 
+class PoseStamped:
+    def __init__(self) -> None:
+        self.header = _Header()
+        self.pose = _Pose()
+
+
+class Vector3Stamped:
+    def __init__(self) -> None:
+        self.header = _Header()
+        self.vector = _Vector3()
+
+
 class _Wrench:
     def __init__(self) -> None:
         self.force = _Vector3()
@@ -76,8 +88,23 @@ class OverrideRCIn:
         self.channels = []
 
 
+class _Transform:
+    def __init__(self) -> None:
+        self.translation = _Vector3()
+        self.rotation = _Quaternion()
+
+
+class TransformStamped:
+    def __init__(self) -> None:
+        self.header = _Header()
+        self.child_frame_id = ""
+        self.transform = _Transform()
+
+
 class Odometry:
     def __init__(self) -> None:
+        self.header = _Header()
+        self.child_frame_id = ""
         self.pose = _PoseWithCovariance()
         self.twist = _TwistWithCovariance()
 
@@ -161,9 +188,19 @@ class Buffer:
         self.lookup_result = None
         self.lookup_exception = None
 
-    def lookup_transform(self, *args, **kwargs):
-        if self.lookup_exception is not None:
+    def lookup_transform(self, target_frame, source_frame, *args, **kwargs):
+        key = (target_frame, source_frame)
+        if isinstance(self.lookup_exception, dict):
+            if key in self.lookup_exception:
+                raise self.lookup_exception[key]
+        elif self.lookup_exception is not None:
             raise self.lookup_exception
+
+        if isinstance(self.lookup_result, dict):
+            if key in self.lookup_result:
+                return self.lookup_result[key]
+            raise TransformException(f"missing transform {key}")
+
         if self.lookup_result is None:
             raise TransformException("missing transform")
         return self.lookup_result
@@ -176,7 +213,10 @@ class TransformListener:
 
 geometry_msgs = types.ModuleType("geometry_msgs")
 geometry_msgs_msg = types.ModuleType("geometry_msgs.msg")
+geometry_msgs_msg.PoseStamped = PoseStamped
+geometry_msgs_msg.TransformStamped = TransformStamped
 geometry_msgs_msg.TwistStamped = TwistStamped
+geometry_msgs_msg.Vector3Stamped = Vector3Stamped
 geometry_msgs_msg.WrenchStamped = WrenchStamped
 geometry_msgs.msg = geometry_msgs_msg
 sys.modules["geometry_msgs"] = geometry_msgs
@@ -222,6 +262,106 @@ tf2_ros.TransformException = TransformException
 tf2_ros.TransformListener = TransformListener
 sys.modules["tf2_ros"] = tf2_ros
 
+
+def _quat_multiply(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    )
+
+
+def _quat_to_rotation_matrix(
+    quaternion: tuple[float, float, float, float],
+) -> np.ndarray:
+    x, y, z, w = quaternion
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+    return np.array(
+        [
+            [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+            [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+            [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+        ],
+        dtype=float,
+    )
+
+
+def _rotate_vector(
+    quaternion: tuple[float, float, float, float],
+    vector: tuple[float, float, float],
+) -> np.ndarray:
+    return _quat_to_rotation_matrix(quaternion) @ np.asarray(vector, dtype=float)
+
+
+def do_transform_pose_stamped(pose: PoseStamped, transform: TransformStamped) -> PoseStamped:
+    rotation = (
+        transform.transform.rotation.x,
+        transform.transform.rotation.y,
+        transform.transform.rotation.z,
+        transform.transform.rotation.w,
+    )
+    translated = _rotate_vector(
+        rotation,
+        (pose.pose.position.x, pose.pose.position.y, pose.pose.position.z),
+    ) + np.array(
+        [
+            transform.transform.translation.x,
+            transform.transform.translation.y,
+            transform.transform.translation.z,
+        ],
+        dtype=float,
+    )
+    orientation = _quat_multiply(
+        rotation,
+        (
+            pose.pose.orientation.x,
+            pose.pose.orientation.y,
+            pose.pose.orientation.z,
+            pose.pose.orientation.w,
+        ),
+    )
+
+    out = PoseStamped()
+    out.header = transform.header
+    out.pose.position.x = translated[0]
+    out.pose.position.y = translated[1]
+    out.pose.position.z = translated[2]
+    out.pose.orientation.x = orientation[0]
+    out.pose.orientation.y = orientation[1]
+    out.pose.orientation.z = orientation[2]
+    out.pose.orientation.w = orientation[3]
+    return out
+
+
+def do_transform_vector3(vector: Vector3Stamped, transform: TransformStamped) -> Vector3Stamped:
+    rotation = (
+        transform.transform.rotation.x,
+        transform.transform.rotation.y,
+        transform.transform.rotation.z,
+        transform.transform.rotation.w,
+    )
+    rotated = _rotate_vector(rotation, (vector.vector.x, vector.vector.y, vector.vector.z))
+    out = Vector3Stamped()
+    out.header = transform.header
+    out.vector.x = rotated[0]
+    out.vector.y = rotated[1]
+    out.vector.z = rotated[2]
+    return out
+
+
+tf2_geometry_msgs = types.ModuleType("tf2_geometry_msgs")
+tf2_geometry_msgs.do_transform_pose_stamped = do_transform_pose_stamped
+tf2_geometry_msgs.do_transform_vector3 = do_transform_vector3
+sys.modules["tf2_geometry_msgs"] = tf2_geometry_msgs
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mr_pinchy.mr_pinchy_interface.mr_pinchy_interface.brov_ctrl_twist import (  # noqa: E402
@@ -235,7 +375,6 @@ from mr_pinchy.mr_pinchy_interface.mr_pinchy_interface.brov_ctrl_twist import ( 
 )
 from mr_pinchy.mr_pinchy_interface.mr_pinchy_interface.brov_wrench_to_pwm import wrench_to_rc_override  # noqa: E402
 from mr_pinchy.mr_pinchy_interface.mr_pinchy_interface.brov_dynamics import (  # noqa: E402
-    bluerov2_dynamics,
     bluerov2_model_terms,
 )
 
@@ -259,22 +398,20 @@ def _make_transform(
     *,
     translation=(0.0, 0.0, 0.0),
     quaternion=(0.0, 0.0, 0.0, 1.0),
-):
-    return types.SimpleNamespace(
-        transform=types.SimpleNamespace(
-            translation=types.SimpleNamespace(
-                x=translation[0],
-                y=translation[1],
-                z=translation[2],
-            ),
-            rotation=types.SimpleNamespace(
-                x=quaternion[0],
-                y=quaternion[1],
-                z=quaternion[2],
-                w=quaternion[3],
-            ),
-        )
-    )
+    header_frame: str = "mr_pinchy/base_link",
+    child_frame: str = "",
+) -> TransformStamped:
+    msg = TransformStamped()
+    msg.header.frame_id = header_frame
+    msg.child_frame_id = child_frame
+    msg.transform.translation.x = translation[0]
+    msg.transform.translation.y = translation[1]
+    msg.transform.translation.z = translation[2]
+    msg.transform.rotation.x = quaternion[0]
+    msg.transform.rotation.y = quaternion[1]
+    msg.transform.rotation.z = quaternion[2]
+    msg.transform.rotation.w = quaternion[3]
+    return msg
 
 
 def _make_twist_stamped(
@@ -300,8 +437,12 @@ def _make_odom(
     rpy=(0.0, 0.0, 0.0),
     linear=(0.0, 0.0, 0.0),
     angular=(0.0, 0.0, 0.0),
+    frame_id: str = "map_ned",
+    child_frame_id: str = "mr_pinchy/base_link",
 ) -> Odometry:
     msg = Odometry()
+    msg.header.frame_id = frame_id
+    msg.child_frame_id = child_frame_id
     msg.pose.pose.position.x = pos[0]
     msg.pose.pose.position.y = pos[1]
     msg.pose.pose.position.z = pos[2]
@@ -333,25 +474,23 @@ def _wrench_vector(msg: WrenchStamped) -> np.ndarray:
     )
 
 
-def test_bluerov2_model_terms_reconstruct_dynamics() -> None:
-    x = np.array([1.0, -2.0, 0.5, 0.2, -0.1, 0.3, 0.4, -0.3, 0.2, 0.1, -0.05, 0.07])
+def test_bluerov2_model_terms_keep_only_body_force_terms() -> None:
+    eta = np.array([1.0, -2.0, 0.5, 0.2, -0.1, 0.3], dtype=float)
+    nu = np.array([0.4, -0.3, 0.2, 0.1, -0.05, 0.07], dtype=float)
 
-    f, g = bluerov2_dynamics(x)
-    terms = bluerov2_model_terms(x[:6], x[6:])
-    f_expected = np.concatenate(
-        [
-            np.asarray(terms["J"] @ terms["nu"], dtype=float),
-            np.asarray(
-                terms["M_inv"]
-                @ (-terms["C"] @ terms["nu"] - terms["D"] @ terms["nu_rel"] - terms["g"]),
-                dtype=float,
-            ),
-        ]
-    )
+    terms = bluerov2_model_terms(eta, nu)
 
-    assert np.allclose(np.asarray(f, dtype=float), f_expected)
-    assert np.allclose(np.asarray(g[:6, :], dtype=float), np.zeros((6, 6)))
-    assert np.allclose(np.asarray(g[6:, :], dtype=float), np.asarray(terms["M_inv"], dtype=float))
+    assert "R" not in terms
+    assert "T" not in terms
+    assert "J" not in terms
+    assert np.allclose(np.asarray(terms["eta"], dtype=float), eta)
+    assert np.allclose(np.asarray(terms["nu"], dtype=float), nu)
+    assert np.allclose(np.asarray(terms["nu_rel"], dtype=float), nu)
+    assert np.asarray(terms["M"], dtype=float).shape == (6, 6)
+    assert np.asarray(terms["M_inv"], dtype=float).shape == (6, 6)
+    assert np.asarray(terms["C"], dtype=float).shape == (6, 6)
+    assert np.asarray(terms["D"], dtype=float).shape == (6, 6)
+    assert np.asarray(terms["g"], dtype=float).shape == (6,)
 
 
 def test_twist_to_body_velocity_uses_frd_ordering() -> None:
@@ -423,6 +562,7 @@ def test_compute_control_matches_feedforward_when_tracking_exact_reference() -> 
         rpy=(eta[3], eta[4], eta[5]),
         linear=(nu_ref[0], nu_ref[1], nu_ref[2]),
         angular=(nu_ref[3], nu_ref[4], nu_ref[5]),
+        frame_id="map_ned",
     )
 
     tau = node._compute_control()
@@ -438,7 +578,7 @@ def test_compute_control_matches_feedforward_when_tracking_exact_reference() -> 
     assert np.allclose(tau, tau_ff)
 
 
-def test_command_in_si_link_rotates_flu_to_frd() -> None:
+def test_command_in_base_link_flu_rotates_flu_to_frd() -> None:
     node = BrovCtrlSIWrench()
     node._tf_buffer.lookup_result = _make_transform(quaternion=(1.0, 0.0, 0.0, 0.0))
 
@@ -446,12 +586,72 @@ def test_command_in_si_link_rotates_flu_to_frd() -> None:
         _make_twist_stamped(
             linear=(1.0, 2.0, 3.0),
             angular=(4.0, 5.0, 6.0),
-            frame_id="mr_pinchy/si_link",
+            frame_id="mr_pinchy/base_link_flu",
         )
     )
 
     assert nu_ref is not None
     assert np.allclose(nu_ref, [1.0, -2.0, -3.0, 4.0, -5.0, -6.0])
+
+
+def test_odom_in_base_link_transforms_base_link_flu_pose_and_twist() -> None:
+    node = BrovCtrlSIWrench()
+    node._tf_buffer.lookup_result = {
+        ("mr_pinchy/base_link", "mr_pinchy/base_link_flu"): _make_transform(
+            quaternion=(1.0, 0.0, 0.0, 0.0),
+            header_frame="mr_pinchy/base_link",
+            child_frame="mr_pinchy/base_link_flu",
+        ),
+        ("mr_pinchy/base_link_flu", "mr_pinchy/base_link"): _make_transform(
+            quaternion=(1.0, 0.0, 0.0, 0.0),
+            header_frame="mr_pinchy/base_link_flu",
+            child_frame="mr_pinchy/base_link",
+        ),
+    }
+
+    state = node._odom_in_base_link(
+        _make_odom(
+            pos=(1.0, 2.0, 3.0),
+            linear=(4.0, 5.0, 6.0),
+            angular=(0.4, 0.5, 0.6),
+            frame_id="map",
+            child_frame_id="mr_pinchy/base_link_flu",
+        )
+    )
+
+    assert state is not None
+    eta, nu = state
+    assert np.allclose(eta[:3], [1.0, 2.0, 3.0], atol=1e-6)
+    assert np.allclose(eta[3:], [0.0, 0.0, np.pi / 2.0], atol=1e-6)
+    assert np.allclose(nu, [4.0, -5.0, -6.0, 0.4, -0.5, -0.6], atol=1e-6)
+
+
+def test_odom_in_base_link_requires_child_frame_id() -> None:
+    node = BrovCtrlSIWrench()
+
+    try:
+        node._odom_in_base_link(_make_odom(child_frame_id=""))
+    except ValueError as exc:
+        assert "child_frame_id" in str(exc)
+    else:
+        raise AssertionError("expected ValueError when odometry child_frame_id is missing")
+
+
+def test_odom_in_base_link_converts_enu_frd_attitude_to_ned_angles() -> None:
+    node = BrovCtrlSIWrench()
+
+    state = node._odom_in_base_link(
+        _make_odom(
+            rpy=(np.pi, 0.0, 0.0),
+            frame_id="map",
+            child_frame_id="mr_pinchy/base_link",
+        )
+    )
+
+    assert state is not None
+    eta, _ = state
+    assert np.allclose(eta[3:], [0.0, 0.0, np.pi / 2.0], atol=1e-6)
+    assert static_wrench_feedforward(eta, np.zeros(6))[2] < 0.0
 
 
 def test_command_in_base_link_is_used_unchanged() -> None:
@@ -471,23 +671,11 @@ def test_command_in_base_link_is_used_unchanged() -> None:
 def test_missing_tf_forces_zero_output() -> None:
     node = BrovCtrlSIWrench()
     node._tf_buffer.lookup_exception = TransformException("missing transform")
-    node._cmd_cb(_make_twist_stamped(frame_id="mr_pinchy/si_link", linear=(0.3, 0.0, 0.0)))
+    node._cmd_cb(
+        _make_twist_stamped(frame_id="mr_pinchy/base_link_flu", linear=(0.3, 0.0, 0.0))
+    )
     node._odom_cb(_make_odom())
 
-    node._tick()
-
-    wrench_msg = node._wrench_pub.messages[-1]
-    rc_msg = node._rc_pub.messages[-1]
-    assert np.allclose(_wrench_vector(wrench_msg), np.zeros(6))
-    assert rc_msg.channels[:6] == [1500] * 6
-
-
-def test_timeout_on_stale_command_publishes_zero_wrench_and_neutral_rc() -> None:
-    node = BrovCtrlSIWrench()
-    node._nu_ref = np.ones(6)
-    node._last_cmd_rx_sec = time.monotonic() - 10.0
-    node._last_odom = _make_odom()
-    node._last_odom_rx_sec = time.monotonic()
     node._tick()
 
     wrench_msg = node._wrench_pub.messages[-1]
@@ -499,7 +687,6 @@ def test_timeout_on_stale_command_publishes_zero_wrench_and_neutral_rc() -> None
 def test_timeout_on_stale_odom_publishes_zero_wrench_and_neutral_rc() -> None:
     node = BrovCtrlSIWrench()
     node._last_cmd = _make_twist_stamped(linear=(0.2, 0.0, 0.0))
-    node._last_cmd_rx_sec = time.monotonic()
     node._last_odom = _make_odom()
     node._last_odom_rx_sec = time.monotonic() - 10.0
     node._tick()

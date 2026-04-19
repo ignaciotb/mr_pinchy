@@ -7,8 +7,20 @@ from geometry_msgs.msg import WrenchStamped
 from mavros_msgs.msg import OverrideRCIn
 
 from mr_pinchy.mr_pinchy_interface.doc.px4_wrench_allocator import (
-    build_bluerov2_heavy_effectiveness_matrix,
+    build_bluerov2_heavy_effectiveness_matrix as _build_px4_effectiveness_matrix,
 )
+
+_BLUEROV2_HEAVY_ROTORS_60002 = [
+    #  AX   AY   AZ    PX    PY    PZ   KM
+    (  1., -1.,  0.,   0.14,  0.10,  0.06, 0.),  # rotor 0
+    (  1.,  1.,  0.,   0.14, -0.10,  0.06, 0.),  # rotor 1
+    (  1.,  1.,  0.,  -0.14,  0.10,  0.06, 0.),  # rotor 2
+    (  1., -1.,  0.,  -0.14, -0.10,  0.06, 0.),  # rotor 3
+    (  0.,  0., -1.,   0.12,  0.22,  0.00, 0.),  # rotor 4
+    (  0.,  0.,  1.,   0.12, -0.22,  0.00, 0.),  # rotor 5
+    (  0.,  0.,  1.,  -0.12,  0.22,  0.00, 0.),  # rotor 6
+    (  0.,  0., -1.,  -0.12, -0.22,  0.00, 0.),  # rotor 7
+]
 
 _DEFAULT_MOTOR_DIRECTION_SIGNS = (-1, -1, 1, 1, -1, 1, 1, -1)
 
@@ -28,6 +40,15 @@ _ARDUSUB_HEAVY_AXIS_TO_MOTOR = np.array(
     dtype=float,
 )
 
+_DEFAULT_CT = 6.5
+
+
+def build_bluerov2_heavy_effectiveness_matrix(
+    ct: float | np.ndarray | None = None,
+    *,
+    geometry: str = "60002",
+) -> np.ndarray:
+    return _build_px4_effectiveness_matrix(ct, geometry=geometry)
 
 def _pwm_axis(axis_cmd: float, neutral_pwm: int, delta_pwm: int) -> int:
     clipped = float(np.clip(axis_cmd, -1.0, 1.0))

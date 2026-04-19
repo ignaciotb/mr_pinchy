@@ -46,7 +46,10 @@ sys.modules["mavros_msgs.msg"] = mavros_msgs_msg
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mr_pinchy.mr_pinchy_interface.mr_pinchy_interface.brov_wrench_to_pwm import wrench_to_rc_override
+from mr_pinchy.mr_pinchy_interface.mr_pinchy_interface.brov_wrench_to_pwm import (
+    build_bluerov2_heavy_effectiveness_matrix,
+    wrench_to_rc_override,
+)
 
 
 def _make_wrench(
@@ -155,3 +158,12 @@ def test_motor_direction_signs_change_output_deterministically() -> None:
     )
 
     assert default.channels != flipped.channels
+
+
+def test_effectiveness_matrix_supports_1022_geometry() -> None:
+    B_60002 = build_bluerov2_heavy_effectiveness_matrix(geometry="60002")
+    B_1022 = build_bluerov2_heavy_effectiveness_matrix(geometry="1022")
+
+    assert B_60002.shape == (6, 8)
+    assert B_1022.shape == (6, 8)
+    assert not (B_60002 == B_1022).all()

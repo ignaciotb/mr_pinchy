@@ -1,8 +1,8 @@
-import jax.numpy as jnp
+import numpy as np
 
 
 def wrap_pi(a):
-    return jnp.arctan2(jnp.sin(a), jnp.cos(a))
+    return np.arctan2(np.sin(a), np.cos(a))
 
 
 def _bluerov2_constants():
@@ -57,65 +57,19 @@ def _bluerov2_constants():
     }
 
 
-def _rotation_and_kinematics(eta):
-    phi, theta, psi = eta[3], eta[4], eta[5]
-    cphi, sphi = jnp.cos(phi), jnp.sin(phi)
-    cth, sth = jnp.cos(theta), jnp.sin(theta)
-    cpsi, spsi = jnp.cos(psi), jnp.sin(psi)
-
-    R = jnp.array(
-        [
-            [
-                cpsi * cth,
-                -spsi * cphi + cpsi * sth * sphi,
-                spsi * sphi + cpsi * cphi * sth,
-            ],
-            [
-                spsi * cth,
-                cpsi * cphi + sphi * sth * spsi,
-                -cpsi * sphi + cphi * sth * spsi,
-            ],
-            [-sth, cth * sphi, cth * cphi],
-        ]
-    )
-
-    eps = 1e-6
-    sign = jnp.where(cth >= 0.0, 1.0, -1.0)
-    cth_safe = jnp.where(jnp.abs(cth) < eps, sign * eps, cth)
-    inv_cth = 1.0 / cth_safe
-    tth = sth * inv_cth
-    T = jnp.array(
-        [
-            [1.0, sphi * tth, cphi * tth],
-            [0.0, cphi, -sphi],
-            [0.0, sphi * inv_cth, cphi * inv_cth],
-        ]
-    )
-
-    J = jnp.zeros((6, 6))
-    J = J.at[:3, :3].set(R)
-    J = J.at[3:, 3:].set(T)
-    return R, T, J
-
-
-def bluerov2_model_terms(eta, nu, v_current_ned=None):
+def bluerov2_model_terms(eta, nu):
     """Return the BlueROV2 model decomposition used by the controllers."""
-    eta = jnp.asarray(eta, dtype=jnp.float32)
-    nu = jnp.asarray(nu, dtype=jnp.float32)
-    if v_current_ned is None:
-        v_current_ned = jnp.zeros(3, dtype=eta.dtype)
-    else:
-        v_current_ned = jnp.asarray(v_current_ned, dtype=eta.dtype)
+    eta = np.asarray(eta, dtype=np.float32)
+    nu = np.asarray(nu, dtype=np.float32)
 
     c = _bluerov2_constants()
-    R, T, J = _rotation_and_kinematics(eta)
 
     W = c["m"] * c["g"]
     B = c["rho"] * c["g"] * c["V"]
 
-    MRB = jnp.diag(jnp.array([c["m"], c["m"], c["m"], c["Ix"], c["Iy"], c["Iz"]]))
-    MA = -jnp.diag(
-        jnp.array(
+    MRB = np.diag(np.array([c["m"], c["m"], c["m"], c["Ix"], c["Iy"], c["Iz"]]))
+    MA = -np.diag(
+        np.array(
             [
                 c["Xu_dot"],
                 c["Yv_dot"],
@@ -127,10 +81,10 @@ def bluerov2_model_terms(eta, nu, v_current_ned=None):
         )
     )
     M = MRB + MA
-    M_inv = jnp.linalg.inv(M)
+    M_inv = np.linalg.inv(M)
 
     u, v, w, p, q, r = nu
-    C_RB = jnp.array(
+    C_RB = np.array(
         [
             [0.0, 0.0, 0.0, 0.0, c["m"] * w, -c["m"] * v],
             [0.0, 0.0, 0.0, -c["m"] * w, 0.0, c["m"] * u],
@@ -140,7 +94,7 @@ def bluerov2_model_terms(eta, nu, v_current_ned=None):
             [c["m"] * v, -c["m"] * u, 0.0, c["Iy"] * q, -c["Ix"] * p, 0.0],
         ]
     )
-    C_A = jnp.array(
+    C_A = np.array(
         [
             [0.0, 0.0, 0.0, 0.0, -c["Zw_dot"] * w, c["Yv_dot"] * v],
             [0.0, 0.0, 0.0, c["Zw_dot"] * w, 0.0, -c["Xu_dot"] * u],
@@ -152,29 +106,28 @@ def bluerov2_model_terms(eta, nu, v_current_ned=None):
     )
     C = C_RB + C_A
 
-    v_c_body = R.T @ v_current_ned
-    nu_rel = nu.at[:3].add(-v_c_body)
+    nu_rel = nu
     u_rel, v_rel, w_rel, p_rel, q_rel, r_rel = nu_rel
 
-    Dlin = jnp.diag(jnp.array([c["Xu"], c["Yv"], c["Zw"], c["Kp"], c["Mq"], c["Nr"]]))
-    Dquad = jnp.diag(
-        jnp.array(
+    Dlin = np.diag(np.array([c["Xu"], c["Yv"], c["Zw"], c["Kp"], c["Mq"], c["Nr"]]))
+    Dquad = np.diag(
+        np.array(
             [
-                c["Xu_abs"] * jnp.abs(u_rel),
-                c["Yv_abs"] * jnp.abs(v_rel),
-                c["Zw_abs"] * jnp.abs(w_rel),
-                c["Kp_abs"] * jnp.abs(p_rel),
-                c["Mq_abs"] * jnp.abs(q_rel),
-                c["Nr_abs"] * jnp.abs(r_rel),
+                c["Xu_abs"] * np.abs(u_rel),
+                c["Yv_abs"] * np.abs(v_rel),
+                c["Zw_abs"] * np.abs(w_rel),
+                c["Kp_abs"] * np.abs(p_rel),
+                c["Mq_abs"] * np.abs(q_rel),
+                c["Nr_abs"] * np.abs(r_rel),
             ]
         )
     )
     D = Dlin + Dquad
 
     phi, theta = eta[3], eta[4]
-    cphi, sphi = jnp.cos(phi), jnp.sin(phi)
-    cth, sth = jnp.cos(theta), jnp.sin(theta)
-    g_vec = jnp.array(
+    cphi, sphi = np.cos(phi), np.sin(phi)
+    cth, sth = np.cos(theta), np.sin(theta)
+    g_vec = np.array(
         [
             (W - B) * sth,
             -(W - B) * cth * sphi,
@@ -188,9 +141,6 @@ def bluerov2_model_terms(eta, nu, v_current_ned=None):
     return {
         "eta": eta,
         "nu": nu,
-        "R": R,
-        "T": T,
-        "J": J,
         "MRB": MRB,
         "MA": MA,
         "M": M,
@@ -202,21 +152,3 @@ def bluerov2_model_terms(eta, nu, v_current_ned=None):
         "g": g_vec,
         "nu_rel": nu_rel,
     }
-
-
-def bluerov2_dynamics(x, v_current_ned=None):
-    """Affine dynamics ẋ = f(x) + G(x) τ for BlueROV2."""
-    x = jnp.asarray(x, dtype=jnp.float32)
-    eta = x[:6]
-    nu = x[6:]
-
-    terms = bluerov2_model_terms(eta, nu, v_current_ned=v_current_ned)
-    eta_dot = terms["J"] @ nu
-    nu_dot_drift = terms["M_inv"] @ (
-        -terms["C"] @ nu - terms["D"] @ terms["nu_rel"] - terms["g"]
-    )
-
-    f = jnp.concatenate([eta_dot, nu_dot_drift])
-    G_full = jnp.zeros((12, 6), dtype=x.dtype)
-    G_full = G_full.at[6:, :].set(terms["M_inv"])
-    return f, G_full
