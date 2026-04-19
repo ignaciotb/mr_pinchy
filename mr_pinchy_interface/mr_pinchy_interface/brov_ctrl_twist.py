@@ -63,7 +63,7 @@ class BrovTwistController(Node):
     def __init__(self) -> None:
         super().__init__("brov_ctrl_si_wrench")
 
-        self.declare_parameter("cmd_topic", "/pinchy/cmd_vel")
+        self.declare_parameter("cmd_topic", "mr_pinchy/cmd_vel")
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom")
         self.declare_parameter("wrench_topic", "/cmd_wrench")
         self.declare_parameter("rc_topic", "/mavros/rc/override")
@@ -182,7 +182,7 @@ class BrovTwistController(Node):
         transformed = do_transform_vector3(vector, copy.deepcopy(transform))
         return vector3_to_array(transformed.vector)
 
-    def _odom_in_base_link(self, odom: Odometry) -> tuple[np.ndarray, np.ndarray] | None:
+    def _get_fossen_state(self, odom: Odometry) -> tuple[np.ndarray, np.ndarray] | None:
         source_frame = getattr(odom, "child_frame_id", "")
         if not source_frame:
             raise ValueError("odometry child_frame_id is required")
@@ -245,7 +245,7 @@ class BrovTwistController(Node):
         return eta, nu
 
     def _command_in_base_link(self, msg: TwistStamped) -> np.ndarray | None:
-        source_frame = msg.header.frame_id or self._base_link_flu_frame
+        source_frame = msg.header.frame_id
         linear = self._transform_vector_to_base_link(
             msg.twist.linear,
             source_frame=source_frame,
@@ -264,7 +264,7 @@ class BrovTwistController(Node):
         if self._nu_ref is None or self._last_odom is None:
             return None
 
-        state = self._odom_in_base_link(self._last_odom)
+        state = self._get_fossen_state(self._last_odom)
         if state is None:
             return None
         eta, nu = state
