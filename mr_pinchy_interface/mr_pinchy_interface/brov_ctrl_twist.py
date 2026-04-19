@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import math
 import time
 
 import numpy as np
@@ -23,182 +22,35 @@ from tf2_geometry_msgs import do_transform_pose_stamped, do_transform_vector3
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from mr_pinchy_interface.brov_dynamics import bluerov2_model_terms
-from mr_pinchy_interface.brov_wrench_to_pwm import wrench_to_rc_override
-
-_ENU_TO_NED_ROTATION = np.array(
-    [
-        [0.0, 1.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 0.0, -1.0],
-    ],
-    dtype=float,
+from mr_pinchy_interface.brov_utils import (
+    body_wrench_message,
+    clamp,
+    odom_to_body_state,
+    pose_rpy_in_ned,
+    pose_stamped_from_pose,
+    pose_stamped_from_transform,
+    quat_to_rotation_matrix,
+    quat_to_rpy,
+    rpy_from_rotation_matrix,
+    transform_from_pose,
+    twist_to_body_velocity,
+    vector3_stamped,
+    vector3_to_array,
+    world_to_ned_rotation,
+    wrench_to_rc_override,
 )
 
-
-def _clamp(x: float, lo: float, hi: float) -> float:
-    return lo if x < lo else hi if x > hi else x
-
-
-def _quat_to_rpy(x: float, y: float, z: float, w: float) -> tuple[float, float, float]:
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-
-    sinp = 2.0 * (w * y - z * x)
-    sinp = _clamp(sinp, -1.0, 1.0)
-    pitch = math.asin(sinp)
-
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
-    return roll, pitch, yaw
-
-
-def _quat_to_rotation_matrix(x: float, y: float, z: float, w: float) -> np.ndarray:
-    xx, yy, zz = x * x, y * y, z * z
-    xy, xz, yz = x * y, x * z, y * z
-    wx, wy, wz = w * x, w * y, w * z
-    return np.array(
-        [
-            [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
-            [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
-            [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
-        ],
-        dtype=float,
-    )
-
-
-def _rpy_from_rotation_matrix(rotation: np.ndarray) -> tuple[float, float, float]:
-    roll = math.atan2(rotation[2, 1], rotation[2, 2])
-    pitch = math.asin(_clamp(-rotation[2, 0], -1.0, 1.0))
-    yaw = math.atan2(rotation[1, 0], rotation[0, 0])
-    return roll, pitch, yaw
-
-
-def _world_to_ned_rotation(frame_id: str) -> np.ndarray:
-    normalized = frame_id.rsplit("/", 1)[-1].lower()
-    if normalized == "ned" or normalized.endswith("_ned"):
-        return np.eye(3, dtype=float)
-    return _ENU_TO_NED_ROTATION
-
-
-def _pose_rpy_in_ned(pose, *, world_frame: str) -> tuple[float, float, float]:
-    rotation_world_body = _quat_to_rotation_matrix(
-        pose.orientation.x,
-        pose.orientation.y,
-        pose.orientation.z,
-        pose.orientation.w,
-    )
-    rotation_ned_body = _world_to_ned_rotation(world_frame) @ rotation_world_body
-    return _rpy_from_rotation_matrix(rotation_ned_body)
-
-
-def twist_to_body_velocity(msg: TwistStamped) -> np.ndarray:
-    return np.array(
-        [
-            msg.twist.linear.x,
-            msg.twist.linear.y,
-            msg.twist.linear.z,
-            msg.twist.angular.x,
-            msg.twist.angular.y,
-            msg.twist.angular.z,
-        ],
-        dtype=float,
-    )
-
-
-def odom_to_body_state(odom: Odometry) -> tuple[np.ndarray,  np.ndarray]:
-    pose = odom.pose.pose
-    twist = odom.twist.twist
-    roll, pitch, yaw = _quat_to_rpy(
-        pose.orientation.x,
-        pose.orientation.y,
-        pose.orientation.z,
-        pose.orientation.w,
-    )
-    eta = np.array(
-        [
-            pose.position.x,
-            pose.position.y,
-            pose.position.z,
-            roll,
-            pitch,
-            yaw,
-        ],
-        dtype=float,
-    )
-    nu = np.array(
-        [
-            twist.linear.x,
-            twist.linear.y,
-            twist.linear.z,
-            twist.angular.x,
-            twist.angular.y,
-            twist.angular.z,
-        ],
-        dtype=float,
-    )
-    return eta, nu
-
-
-def _vector3_to_array(msg) -> np.ndarray:
-    return np.array([msg.x, msg.y, msg.z], dtype=float)
-
-
-def _vector3_stamped(msg, *, frame_id: str, stamp=None) -> Vector3Stamped:
-    vector = Vector3Stamped()
-    vector.header.frame_id = frame_id
-    if stamp is not None:
-        vector.header.stamp = stamp
-    vector.vector.x = msg.x
-    vector.vector.y = msg.y
-    vector.vector.z = msg.z
-    return vector
-
-
-def _pose_stamped_from_pose(pose, *, frame_id: str, stamp=None) -> PoseStamped:
-    msg = PoseStamped()
-    msg.header.frame_id = frame_id
-    if stamp is not None:
-        msg.header.stamp = stamp
-    msg.pose = pose
-    return msg
-
-
-def _pose_stamped_from_transform(transform: TransformStamped) -> PoseStamped:
-    msg = PoseStamped()
-    msg.header.frame_id = transform.header.frame_id
-    msg.header.stamp = transform.header.stamp
-    msg.pose.position.x = transform.transform.translation.x
-    msg.pose.position.y = transform.transform.translation.y
-    msg.pose.position.z = transform.transform.translation.z
-    msg.pose.orientation.x = transform.transform.rotation.x
-    msg.pose.orientation.y = transform.transform.rotation.y
-    msg.pose.orientation.z = transform.transform.rotation.z
-    msg.pose.orientation.w = transform.transform.rotation.w
-    return msg
-
-
-def _transform_from_pose(
-    pose,
-    *,
-    target_frame: str,
-    source_frame: str,
-    stamp=None,
-) -> TransformStamped:
-    transform = TransformStamped()
-    transform.header.frame_id = target_frame
-    transform.child_frame_id = source_frame
-    if stamp is not None:
-        transform.header.stamp = stamp
-    transform.transform.translation.x = pose.position.x
-    transform.transform.translation.y = pose.position.y
-    transform.transform.translation.z = pose.position.z
-    transform.transform.rotation.x = pose.orientation.x
-    transform.transform.rotation.y = pose.orientation.y
-    transform.transform.rotation.z = pose.orientation.z
-    transform.transform.rotation.w = pose.orientation.w
-    return transform
+_clamp = clamp
+_quat_to_rpy = quat_to_rpy
+_quat_to_rotation_matrix = quat_to_rotation_matrix
+_rpy_from_rotation_matrix = rpy_from_rotation_matrix
+_world_to_ned_rotation = world_to_ned_rotation
+_pose_rpy_in_ned = pose_rpy_in_ned
+_vector3_to_array = vector3_to_array
+_vector3_stamped = vector3_stamped
+_pose_stamped_from_pose = pose_stamped_from_pose
+_pose_stamped_from_transform = pose_stamped_from_transform
+_transform_from_pose = transform_from_pose
 
 
 def static_wrench_feedforward(eta: np.ndarray, nu_ref: np.ndarray) -> np.ndarray:
@@ -227,26 +79,6 @@ def clamp_body_wrench(
     tau[:3] = np.clip(tau[:3], -force_limits, force_limits)
     tau[3:] = np.clip(tau[3:], -torque_limits, torque_limits)
     return tau
-
-
-def body_wrench_message(
-    tau: np.ndarray,
-    *,
-    frame_id: str = "mr_pinchy/base_link",
-    stamp=None,
-) -> WrenchStamped:
-    tau = np.asarray(tau, dtype=float)
-    msg = WrenchStamped()
-    msg.header.frame_id = frame_id
-    if stamp is not None:
-        msg.header.stamp = stamp
-    msg.wrench.force.x = float(tau[0])
-    msg.wrench.force.y = float(tau[1])
-    msg.wrench.force.z = float(tau[2])
-    msg.wrench.torque.x = float(tau[3])
-    msg.wrench.torque.y = float(tau[4])
-    msg.wrench.torque.z = float(tau[5])
-    return msg
 
 
 class BrovTwistController(Node):
@@ -283,8 +115,6 @@ class BrovTwistController(Node):
         self._tz_max = 20.0
         self._neutral_pwm = 1500
         self._delta_pwm = 100
-        self._geometry = "60002"
-        self._motor_direction_signs = (-1, -1, 1, 1, -1, 1, 1, -1)
         self._tf_timeout = Duration(seconds=0.05)
 
         self._gains = np.array(
@@ -480,8 +310,6 @@ class BrovTwistController(Node):
             wrench_msg,
             neutral_pwm=self._neutral_pwm,
             delta_pwm=self._delta_pwm,
-            geometry=self._geometry,
-            motor_direction_signs=self._motor_direction_signs,
         )
         self._wrench_pub.publish(wrench_msg)
         self._rc_pub.publish(rc_msg)
@@ -517,6 +345,9 @@ class BrovTwistController(Node):
             return
 
         self._publish_wrench_and_rc(tau)
+
+
+BrovCtrlSIWrench = BrovTwistController
 
 
 def main(args=None) -> None:

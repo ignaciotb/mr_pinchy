@@ -32,7 +32,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'brov_ctrl_waypoint = mr_pinchy_interface.brov_ctrl_pid_waypoint:main',
+            'brov_ctrl_waypoint = mr_pinchy_interface.brov_ctrl_waypoint:main',
             'brov_ctrl_twist = mr_pinchy_interface.brov_ctrl_twist:main',
         ],
     },

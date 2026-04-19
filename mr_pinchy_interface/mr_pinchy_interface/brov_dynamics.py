@@ -1,9 +1,6 @@
 import numpy as np
 
-
-def wrap_pi(a):
-    return np.arctan2(np.sin(a), np.cos(a))
-
+from mr_pinchy_interface.brov_utils import wrap_pi
 
 def _bluerov2_constants():
     # Physical/environment constants

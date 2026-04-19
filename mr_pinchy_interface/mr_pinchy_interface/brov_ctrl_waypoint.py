@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import math
 import time
-from dataclasses import dataclass
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, WrenchStamped
@@ -15,141 +13,17 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from tf2_geometry_msgs import do_transform_pose_stamped
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from mr_pinchy_interface.brov_wrench_to_pwm import wrench_to_rc_override
+from mr_pinchy_interface.brov_utils import (
+    PIDAxis,
+    build_wrench_message,
+    neutral_rc_override,
+    pid_outputs_to_wrench,
+    quat_to_rpy,
+    wrench_to_rc_override,
+)
 
 
-def _clamp(x: float, lo: float, hi: float) -> float:
-    return lo if x < lo else hi if x > hi else x
-
-
-def _wrap_pi(angle: float) -> float:
-    return math.atan2(math.sin(angle), math.cos(angle))
-
-
-def _yaw_from_quat(x: float, y: float, z: float, w: float) -> float:
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    return math.atan2(siny_cosp, cosy_cosp)
-
-
-def _rpy_from_quat(x: float, y: float, z: float, w: float) -> tuple[float, float, float]:
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-
-    sinp = 2.0 * (w * y - z * x)
-    if abs(sinp) >= 1.0:
-        pitch = math.copysign(math.pi / 2.0, sinp)
-    else:
-        pitch = math.asin(sinp)
-
-    yaw = _yaw_from_quat(x, y, z, w)
-    return roll, pitch, yaw
-
-
-def neutral_rc_override(*, neutral_pwm: int) -> OverrideRCIn:
-    msg = OverrideRCIn()
-    channels = [OverrideRCIn.CHAN_NOCHANGE] * 18
-    for idx in range(6):
-        channels[idx] = neutral_pwm
-    msg.channels = channels
-    return msg
-
-
-def build_wrench_message(
-    *,
-    force_x: float = 0.0,
-    force_y: float = 0.0,
-    force_z: float = 0.0,
-    torque_x: float = 0.0,
-    torque_y: float = 0.0,
-    torque_z: float = 0.0,
-    frame_id: str = "",
-    stamp=None,
-) -> WrenchStamped:
-    msg = WrenchStamped()
-    if hasattr(msg, "header"):
-        msg.header.frame_id = frame_id
-        if stamp is not None:
-            msg.header.stamp = stamp
-    msg.wrench.force.x = force_x
-    msg.wrench.force.y = force_y
-    msg.wrench.force.z = force_z
-    msg.wrench.torque.x = torque_x
-    msg.wrench.torque.y = torque_y
-    msg.wrench.torque.z = torque_z
-    return msg
-
-
-def pid_outputs_to_wrench(
-    *,
-    surge_pid_output: float,
-    sway_pid_output: float,
-    heave_pid_output: float,
-    roll_pid_output: float = 0.0,
-    pitch_pid_output: float = 0.0,
-    yaw_pid_output: float,
-    force_x_scale: float,
-    force_y_scale: float,
-    force_z_scale: float,
-    torque_x_scale: float = 1.0,
-    torque_y_scale: float = 1.0,
-    torque_z_scale: float,
-    frame_id: str = "",
-    stamp=None,
-) -> WrenchStamped:
-    return build_wrench_message(
-        force_x=surge_pid_output * force_x_scale,
-        force_y=sway_pid_output * force_y_scale,
-        force_z=heave_pid_output * force_z_scale,
-        torque_x=roll_pid_output * torque_x_scale,
-        torque_y=pitch_pid_output * torque_y_scale,
-        torque_z=yaw_pid_output * torque_z_scale,
-        frame_id=frame_id,
-        stamp=stamp,
-    )
-
-
-@dataclass
-class PIDAxis:
-    kp: float
-    ki: float
-    kd: float
-    integral_limit: float
-    output_limit: float
-    integral: float = 0.0
-    prev_error: float = 0.0
-    has_prev: bool = False
-
-    def reset(self) -> None:
-        self.integral = 0.0
-        self.prev_error = 0.0
-        self.has_prev = False
-
-    def step(self, error: float, dt: float, *, wrap_error: bool = False) -> float:
-        if wrap_error:
-            error = _wrap_pi(error)
-
-        if dt <= 1e-6:
-            deriv = 0.0
-        else:
-            self.integral += error * dt
-            self.integral = _clamp(self.integral, -self.integral_limit, self.integral_limit)
-            if self.has_prev:
-                error_delta = error - self.prev_error
-                if wrap_error:
-                    error_delta = _wrap_pi(error_delta)
-                deriv = error_delta / dt
-            else:
-                deriv = 0.0
-        out = self.kp * error + self.ki * self.integral + self.kd * deriv
-        out = _clamp(out, -self.output_limit, self.output_limit)
-        self.prev_error = error
-        self.has_prev = True
-        return out
-
-
-class BrovCtrlPIDWrench(Node):
+class BrovCtrlWayPoint(Node):
     def __init__(self) -> None:
         super().__init__("brov_ctrl_pid_wrench")
 
@@ -161,7 +35,9 @@ class BrovCtrlPIDWrench(Node):
         goal_topic = self.get_parameter("goal_topic").get_parameter_value().string_value
         odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
         rc_topic = self.get_parameter("rc_topic").get_parameter_value().string_value
-        wrench_topic = self.get_parameter("wrench_topic").get_parameter_value().string_value
+        wrench_topic = (
+            self.get_parameter("wrench_topic").get_parameter_value().string_value
+        )
 
         self._map_frame = "map"
         self._base_link_frame = "mr_pinchy/base_link"
@@ -178,9 +54,15 @@ class BrovCtrlPIDWrench(Node):
         self._period = 1.0 / self._publish_rate_hz
         self._odom_timeout = 0.3
 
-        self._pid_x = PIDAxis(kp=3.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0)
-        self._pid_y = PIDAxis(kp=3.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0)
-        self._pid_z = PIDAxis(kp=1.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0)
+        self._pid_x = PIDAxis(
+            kp=3.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0
+        )
+        self._pid_y = PIDAxis(
+            kp=3.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0
+        )
+        self._pid_z = PIDAxis(
+            kp=1.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0
+        )
         self._pid_roll = PIDAxis(
             kp=1.0,
             ki=0.0,
@@ -239,10 +121,11 @@ class BrovCtrlPIDWrench(Node):
         src = PoseStamped()
         src.header = self._goal_pose.header
         src.pose = self._goal_pose.pose
-        self.get_logger().info(f"Received new goal pose: frame_id='{src.header.frame_id}', "
+        self.get_logger().info(
+            f"Received new goal pose: frame_id='{src.header.frame_id}', "
             f"position=({src.pose.position.x:.3f}, {src.pose.position.y:.3f}, {src.pose.position.z:.3f}), "
-            f"orientation=({src.pose.orientation.x:.3f}, {src.pose.orientation.y:.3f}, {src.pose.orientation.z:.3f}, {src.pose.orientation.w:.3f})")
-
+            f"orientation=({src.pose.orientation.x:.3f}, {src.pose.orientation.y:.3f}, {src.pose.orientation.z:.3f}, {src.pose.orientation.w:.3f})"
+        )
 
         if not src.header.frame_id:
             src.header.frame_id = self._map_frame
@@ -293,7 +176,9 @@ class BrovCtrlPIDWrench(Node):
         self._pid_pitch.reset()
         self._pid_yaw.reset()
 
-    def _publish_wrench_and_rc(self, wrench_msg: WrenchStamped, rc_msg: OverrideRCIn) -> None:
+    def _publish_wrench_and_rc(
+        self, wrench_msg: WrenchStamped, rc_msg: OverrideRCIn
+    ) -> None:
         self._wrench_pub.publish(wrench_msg)
         self._rc_pub.publish(rc_msg)
 
@@ -334,7 +219,7 @@ class BrovCtrlPIDWrench(Node):
         ey = goal.position.y
         ez = goal.position.z
 
-        eroll, epitch, eyaw = _rpy_from_quat(
+        eroll, epitch, eyaw = quat_to_rpy(
             goal.orientation.x,
             goal.orientation.y,
             goal.orientation.z,
@@ -391,7 +276,7 @@ class BrovCtrlPIDWrench(Node):
 
 def main(args=None) -> None:
     rclpy.init(args=args)
-    node = BrovCtrlPIDWrench()
+    node = BrovCtrlWayPoint()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
