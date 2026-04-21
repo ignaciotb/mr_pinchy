@@ -7,6 +7,7 @@ import time
 import numpy as np
 import rclpy
 from geometry_msgs.msg import (
+    TransformStamped,
     TwistStamped,
     WrenchStamped,
 )
@@ -16,15 +17,17 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from tf2_geometry_msgs import do_transform_pose_stamped, do_transform_vector3
-from tf2_ros import Buffer, TransformException, TransformListener
+from tf2_ros import Buffer, StaticTransformBroadcaster, TransformException, TransformListener
 
 from mr_pinchy_interface.brov_dynamics import bluerov2_model_terms
 from mr_pinchy_interface.brov_utils import (
     body_wrench_message,
+    odom_to_body_state,
     pose_rpy_in_ned,
     pose_stamped_from_pose,
     pose_stamped_from_transform,
     transform_from_pose,
+    twist_to_body_velocity,
     vector3_stamped,
     vector3_to_array,
     wrench_to_rc_override,
@@ -63,12 +66,12 @@ class BrovTwistController(Node):
     def __init__(self) -> None:
         super().__init__("brov_ctrl_si_wrench")
 
-        self.declare_parameter("cmd_topic", "mr_pinchy/cmd_vel")
+        self.declare_parameter("cmd_topic", "/mr_pinchy/cmd_vel")
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom")
-        self.declare_parameter("wrench_topic", "/cmd_wrench")
+        self.declare_parameter("wrench_topic", "/mr_pinchy/cmd_wrench")
         self.declare_parameter("rc_topic", "/mavros/rc/override")
-        self.declare_parameter("base_link_frame", "mr_pinchy/base_link")
-        self.declare_parameter("base_link_flu_frame", "mr_pinchy/base_link_flu")
+        self.declare_parameter("base_link_frame", "/mr_pinchy/base_link")
+        self.declare_parameter("base_link_flu_frame", "/mr_pinchy/base_link_flu")
 
         cmd_topic = str(self.get_parameter("cmd_topic").value)
         odom_topic = str(self.get_parameter("odom_topic").value)
@@ -131,6 +134,8 @@ class BrovTwistController(Node):
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
+        self._static_tf_broadcaster = StaticTransformBroadcaster(self)
+        self._publish_static_body_frames()
 
         self._last_cmd: TwistStamped | None = None
         self._last_odom: Odometry | None = None
@@ -140,9 +145,25 @@ class BrovTwistController(Node):
         self.create_timer(1.0 / self._publish_rate_hz, self._tick)
         self.get_logger().info(
             f"brov_ctrl_twist: cmd='{cmd_topic}', odom='{odom_topic}', "
-            f"wrench='{wrench_topic}', rc='{rc_topic}', base_link='{self._base_link_frame}', "
-            f"base_link_flu='{self._base_link_flu_frame}', rate={self._publish_rate_hz:.1f}Hz"
+            f"wrench='{wrench_topic}', rc='{rc_topic}', base_link_frd='{self._base_link_frame}', "
+            f"base_link_flu='{self._base_link_flu_frame}', static_tf=published, "
+            f"rate={self._publish_rate_hz:.1f}Hz"
         )
+
+    def _publish_static_body_frames(self) -> None:
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = self._base_link_frame
+        transform.child_frame_id = self._base_link_flu_frame
+        transform.transform.translation.x = 0.0
+        transform.transform.translation.y = 0.0
+        transform.transform.translation.z = 0.0
+        # FRD -> FLU is a 180 degree rotation about +X with coincident origins.
+        transform.transform.rotation.x = 1.0
+        transform.transform.rotation.y = 0.0
+        transform.transform.rotation.z = 0.0
+        transform.transform.rotation.w = 0.0
+        self._static_tf_broadcaster.sendTransform(transform)
 
     def _cmd_cb(self, msg: TwistStamped) -> None:
         self._last_cmd = msg

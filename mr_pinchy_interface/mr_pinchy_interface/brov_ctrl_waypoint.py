@@ -19,28 +19,29 @@ from mr_pinchy_interface.brov_utils import (
     neutral_rc_override,
     pid_outputs_to_wrench,
     quat_to_rpy,
+    wrap_pi,
     wrench_to_rc_override,
 )
 
 
-class BrovCtrlWayPoint(Node):
+class BrovWayPointController(Node):
     def __init__(self) -> None:
         super().__init__("brov_ctrl_pid_wrench")
 
         self.declare_parameter("goal_topic", "/goal_pose")
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom")
         self.declare_parameter("rc_topic", "/mavros/rc/override")
-        self.declare_parameter("wrench_topic", "/cmd_wrench")
+        self.declare_parameter("wrench_topic", "/mr_pinchy/cmd_wrench")
+        self.declare_parameter("base_link_frame", "/mr_pinchy/base_link")
+        self.declare_parameter("map_frame", "/map")
 
         goal_topic = self.get_parameter("goal_topic").get_parameter_value().string_value
         odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
         rc_topic = self.get_parameter("rc_topic").get_parameter_value().string_value
-        wrench_topic = (
-            self.get_parameter("wrench_topic").get_parameter_value().string_value
-        )
+        wrench_topic = (self.get_parameter("wrench_topic").get_parameter_value().string_value)
+        self._base_link_frame = self.get_parameter("base_link_frame").get_parameter_value().string_value
+        self._map_frame = self.get_parameter("map_frame").get_parameter_value().string_value
 
-        self._map_frame = "map"
-        self._base_link_frame = "mr_pinchy/base_link"
         self._neutral_pwm = 1500
         self._force_x_scale = 20.0
         self._force_y_scale = 20.0
@@ -276,7 +277,7 @@ class BrovCtrlWayPoint(Node):
 
 def main(args=None) -> None:
     rclpy.init(args=args)
-    node = BrovCtrlWayPoint()
+    node = BrovWayPointController()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

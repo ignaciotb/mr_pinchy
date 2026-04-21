@@ -16,20 +16,18 @@ def generate_launch_description() -> LaunchDescription:
         description="Absolute path to RViz config file",
     )
 
-    pid_node = Node(
+    waypoint_controller = Node(
         package="mr_pinchy_interface",
-        executable="brov_ctrl_pid_wrench",
-        name="brov_ctrl_pid",
+        executable="brov_ctrl_waypoint",
+        name="brov_ctrl_waypoint",
         output="screen",
-        parameters=[
-            {
-                "goal_topic": "/goal_pose",
-                "odom_topic": "/mocap/mr_pinchy/odom",
-                "rc_topic": "/mavros/rc/override",
-                "map_frame": "map",
-                "base_link_frame": "mr_pinchy/base_link",
-            }
-        ],
+    )
+
+    twist_controller = Node(
+        package="mr_pinchy_interface",
+        executable="brov_ctrl_twist",
+        name="brov_ctrl_twist",
+        output="screen",
     )
 
     rviz_node = Node(
@@ -43,7 +41,8 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             rviz_config_arg,
-            pid_node,
+            waypoint_controller,
+            # twist_controller,
             rviz_node,
         ]
     )

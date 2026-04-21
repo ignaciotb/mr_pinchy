@@ -194,6 +194,16 @@ class TransformListener:
         pass
 
 
+class StaticTransformBroadcaster:
+    sent_transforms = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    def sendTransform(self, transform) -> None:
+        self.__class__.sent_transforms.append(transform)
+
+
 class TransformException(Exception):
     pass
 
@@ -254,6 +264,7 @@ sys.modules["tf2_geometry_msgs"] = tf2_geometry_msgs
 
 tf2_ros = types.ModuleType("tf2_ros")
 tf2_ros.Buffer = Buffer
+tf2_ros.StaticTransformBroadcaster = StaticTransformBroadcaster
 tf2_ros.TransformException = TransformException
 tf2_ros.TransformListener = TransformListener
 sys.modules["tf2_ros"] = tf2_ros
@@ -374,6 +385,8 @@ def test_twist_module_reexports_shared_helpers_and_alias() -> None:
 
 
 def test_twist_conversion_helpers_and_zero_tick_behavior() -> None:
+    StaticTransformBroadcaster.sent_transforms.clear()
+
     twist = _make_twist_stamped(linear=(1.0, 2.0, 3.0), angular=(4.0, 5.0, 6.0))
     odom = _make_odom(
         pos=(1.0, 2.0, 3.0),
@@ -389,6 +402,18 @@ def test_twist_conversion_helpers_and_zero_tick_behavior() -> None:
     assert np.allclose(nu, [4.0, 5.0, 6.0, 0.4, 0.5, 0.6], atol=1e-6)
 
     node = BrovTwistController()
+    assert len(StaticTransformBroadcaster.sent_transforms) == 1
+    transform = StaticTransformBroadcaster.sent_transforms[0]
+    assert transform.header.frame_id == "/mr_pinchy/base_link"
+    assert transform.child_frame_id == "/mr_pinchy/base_link_flu"
+    assert transform.transform.translation.x == 0.0
+    assert transform.transform.translation.y == 0.0
+    assert transform.transform.translation.z == 0.0
+    assert transform.transform.rotation.x == 1.0
+    assert transform.transform.rotation.y == 0.0
+    assert transform.transform.rotation.z == 0.0
+    assert transform.transform.rotation.w == 0.0
+
     node._tick()
 
     wrench_msg = node._wrench_pub.messages[-1]
