@@ -32,8 +32,8 @@ class BrovWayPointController(Node):
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom")
         self.declare_parameter("rc_topic", "/mavros/rc/override")
         self.declare_parameter("wrench_topic", "/mr_pinchy/cmd_wrench")
-        self.declare_parameter("base_link_frame", "/mr_pinchy/base_link")
-        self.declare_parameter("map_frame", "/map")
+        self.declare_parameter("base_link_frame", "mr_pinchy/base_link")
+        self.declare_parameter("map_frame", "map")
 
         goal_topic = self.get_parameter("goal_topic").get_parameter_value().string_value
         odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
@@ -62,7 +62,7 @@ class BrovWayPointController(Node):
             kp=3.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0
         )
         self._pid_z = PIDAxis(
-            kp=1.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0
+            kp=3.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=1.0
         )
         self._pid_roll = PIDAxis(
             kp=1.0,
@@ -110,6 +110,11 @@ class BrovWayPointController(Node):
     def _goal_cb(self, msg: PoseStamped) -> None:
         self._goal_pose = msg
         self._goal_pose.pose.position.z = -2.0
+        self.get_logger().info(
+            f"Received new goal pose: frame_id='{msg.header.frame_id}', "
+            f"position=({msg.pose.position.x:.3f}, {msg.pose.position.y:.3f}, {msg.pose.position.z:.3f}), "
+            f"orientation=({msg.pose.orientation.x:.3f}, {msg.pose.orientation.y:.3f}, {msg.pose.orientation.z:.3f}, {msg.pose.orientation.w:.3f})"
+        )
 
     def _odom_cb(self, _msg: Odometry) -> None:
         # Odom is used as a freshness watchdog so control is neutralized on stream loss.
@@ -122,11 +127,6 @@ class BrovWayPointController(Node):
         src = PoseStamped()
         src.header = self._goal_pose.header
         src.pose = self._goal_pose.pose
-        self.get_logger().info(
-            f"Received new goal pose: frame_id='{src.header.frame_id}', "
-            f"position=({src.pose.position.x:.3f}, {src.pose.position.y:.3f}, {src.pose.position.z:.3f}), "
-            f"orientation=({src.pose.orientation.x:.3f}, {src.pose.orientation.y:.3f}, {src.pose.orientation.z:.3f}, {src.pose.orientation.w:.3f})"
-        )
 
         if not src.header.frame_id:
             src.header.frame_id = self._map_frame
@@ -254,7 +254,7 @@ class BrovWayPointController(Node):
 
         rc_msg = wrench_to_rc_override(
             wrench_msg,
-            delta_pwm=150,
+            delta_pwm=100,
         )
 
         if self._debug_log:
@@ -273,6 +273,10 @@ class BrovWayPointController(Node):
             )
 
         self._publish_wrench_and_rc(wrench_msg, rc_msg)
+
+
+_rpy_from_quat = quat_to_rpy
+_wrap_pi = wrap_pi
 
 
 def main(args=None) -> None:

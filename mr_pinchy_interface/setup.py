@@ -34,6 +34,7 @@ setup(
         'console_scripts': [
             'brov_ctrl_waypoint = mr_pinchy_interface.brov_ctrl_waypoint:main',
             'brov_ctrl_twist = mr_pinchy_interface.brov_ctrl_twist:main',
+            'brov_kf_odom = mr_pinchy_interface.brov_kf_odom:main',
         ],
     },
 )

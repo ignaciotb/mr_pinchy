@@ -1,0 +1,536 @@
+#!/usr/bin/env python3
+
+import math
+import time
+
+import numpy as np
+import rclpy
+from geometry_msgs.msg import PoseStamped, TransformStamped
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
+from tf2_ros import TransformBroadcaster
+
+
+def quat_normalize(q):
+    q = np.asarray(q, dtype=float)
+    norm = np.linalg.norm(q)
+    if norm < 1e-12:
+        return np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
+    q = q / norm
+    if q[3] < 0.0:
+        q = -q
+    return q
+
+
+def quat_conjugate(q):
+    q = np.asarray(q, dtype=float)
+    return np.array([-q[0], -q[1], -q[2], q[3]], dtype=float)
+
+
+def quat_multiply(q1, q2):
+    x1, y1, z1, w1 = np.asarray(q1, dtype=float)
+    x2, y2, z2, w2 = np.asarray(q2, dtype=float)
+    return np.array(
+        [
+            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        ],
+        dtype=float,
+    )
+
+
+def quat_exp(rotvec):
+    rotvec = np.asarray(rotvec, dtype=float)
+    angle = float(np.linalg.norm(rotvec))
+    if angle < 1e-12:
+        return quat_normalize(np.array([0.5 * rotvec[0], 0.5 * rotvec[1], 0.5 * rotvec[2], 1.0]))
+    axis = rotvec / angle
+    half = 0.5 * angle
+    return quat_normalize(np.concatenate([axis * math.sin(half), [math.cos(half)]]))
+
+
+def quat_log(q):
+    q = quat_normalize(q)
+    if q[3] < 0.0:
+        q = -q
+    vector = q[:3]
+    vector_norm = float(np.linalg.norm(vector))
+    if vector_norm < 1e-12:
+        return 2.0 * vector
+    angle = 2.0 * math.atan2(vector_norm, q[3])
+    if angle > math.pi:
+        angle -= 2.0 * math.pi
+    return vector * (angle / vector_norm)
+
+
+def quat_to_rotation_matrix(q):
+    x, y, z, w = quat_normalize(q)
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+    return np.array(
+        [
+            [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+            [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+            [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+        ],
+        dtype=float,
+    )
+
+
+def orientation_residual(q_meas, q_pred):
+    q_err = quat_multiply(q_meas, quat_conjugate(q_pred))
+    return quat_log(q_err)
+
+
+def base_link_z_axis_angle_rad(q):
+    rotation = quat_to_rotation_matrix(q)
+    base_link_z_in_mocap = rotation[:, 2]
+    dot = float(np.clip(base_link_z_in_mocap[2], -1.0, 1.0))
+    return float(math.acos(dot))
+
+
+class FilterTuning:
+    def __init__(
+        self,
+        position_std=0.01,
+        orientation_std=0.02,
+        linear_accel_std=0.5,
+        angular_accel_std=1.0,
+    ):
+        self.position_std = position_std
+        self.orientation_std = orientation_std
+        self.linear_accel_std = linear_accel_std
+        self.angular_accel_std = angular_accel_std
+
+
+class MeasurementUpdateResult:
+    def __init__(
+        self,
+        position_accepted,
+        orientation_accepted,
+        position_innovation_m,
+        orientation_innovation_rad,
+        z_axis_accepted=True,
+        z_axis_angle_rad=0.0,
+    ):
+        self.position_accepted = position_accepted
+        self.orientation_accepted = orientation_accepted
+        self.position_innovation_m = position_innovation_m
+        self.orientation_innovation_rad = orientation_innovation_rad
+        self.z_axis_accepted = z_axis_accepted
+        self.z_axis_angle_rad = z_axis_angle_rad
+
+    @property
+    def accepted(self):
+        return (
+            self.position_accepted
+            and self.orientation_accepted
+            and self.z_axis_accepted
+        )
+
+
+class QuaternionCvEkf:
+    def __init__(self, tuning=None):
+        self.tuning = tuning if tuning is not None else FilterTuning()
+        self.position = np.zeros(3, dtype=float)
+        self.linear_velocity = np.zeros(3, dtype=float)
+        self.orientation = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
+        self.angular_velocity = np.zeros(3, dtype=float)
+        self.covariance = np.eye(12, dtype=float)
+        self.initialized = False
+
+    def initialize(self, position, orientation):
+        self.position = np.asarray(position, dtype=float).copy()
+        self.linear_velocity = np.zeros(3, dtype=float)
+        self.orientation = quat_normalize(orientation)
+        self.angular_velocity = np.zeros(3, dtype=float)
+        self.covariance = np.diag(
+            [
+                self.tuning.position_std**2,
+                self.tuning.position_std**2,
+                self.tuning.position_std**2,
+                1.0,
+                1.0,
+                1.0,
+                self.tuning.orientation_std**2,
+                self.tuning.orientation_std**2,
+                self.tuning.orientation_std**2,
+                1.0,
+                1.0,
+                1.0,
+            ]
+        )
+        self.initialized = True
+
+    def predict(self, dt):
+        if not self.initialized:
+            return
+        dt = max(float(dt), 0.0)
+        if dt <= 1e-9:
+            return
+
+        self.position = self.position + self.linear_velocity * dt
+        delta_q = quat_exp(self.angular_velocity * dt)
+        self.orientation = quat_normalize(quat_multiply(delta_q, self.orientation))
+
+        f = np.eye(12, dtype=float)
+        f[0:3, 3:6] = np.eye(3) * dt
+        f[6:9, 9:12] = np.eye(3) * dt
+
+        q = np.zeros((12, 12), dtype=float)
+        linear_accel_var = self.tuning.linear_accel_std**2
+        angular_accel_var = self.tuning.angular_accel_std**2
+        q[0:3, 0:3] = np.eye(3) * linear_accel_var * (dt**4) / 4.0
+        q[0:3, 3:6] = np.eye(3) * linear_accel_var * (dt**3) / 2.0
+        q[3:6, 0:3] = q[0:3, 3:6]
+        q[3:6, 3:6] = np.eye(3) * linear_accel_var * (dt**2)
+        q[6:9, 6:9] = np.eye(3) * angular_accel_var * (dt**4) / 4.0
+        q[6:9, 9:12] = np.eye(3) * angular_accel_var * (dt**3) / 2.0
+        q[9:12, 6:9] = q[6:9, 9:12]
+        q[9:12, 9:12] = np.eye(3) * angular_accel_var * (dt**2)
+
+        self.covariance = f @ self.covariance @ f.T + q
+        self.covariance = 0.5 * (self.covariance + self.covariance.T)
+
+    def update(
+        self,
+        position_meas,
+        orientation_meas,
+        *,
+        max_position_innovation_m=None,
+        max_orientation_innovation_rad=None,
+        max_base_link_z_axis_angle_rad=None,
+    ):
+        orientation_meas = quat_normalize(orientation_meas)
+        z_axis_angle_rad = base_link_z_axis_angle_rad(orientation_meas)
+        z_axis_accepted = self._within_gate(
+            z_axis_angle_rad,
+            max_base_link_z_axis_angle_rad,
+        )
+
+        if not self.initialized:
+            result = MeasurementUpdateResult(
+                position_accepted=True,
+                orientation_accepted=True,
+                position_innovation_m=0.0,
+                orientation_innovation_rad=0.0,
+                z_axis_accepted=z_axis_accepted,
+                z_axis_angle_rad=z_axis_angle_rad,
+            )
+            if result.accepted:
+                self.initialize(position_meas, orientation_meas)
+            return result
+
+        position_meas = np.asarray(position_meas, dtype=float)
+        position_residual = position_meas - self.position
+        orientation_residual_vec = orientation_residual(
+            orientation_meas,
+            self.orientation,
+        )
+        position_innovation_m = float(np.linalg.norm(position_residual))
+        orientation_innovation_rad = float(np.linalg.norm(orientation_residual_vec))
+
+        position_accepted = self._within_gate(
+            position_innovation_m,
+            max_position_innovation_m,
+        )
+        orientation_accepted = self._within_gate(
+            orientation_innovation_rad,
+            max_orientation_innovation_rad,
+        )
+
+        result = MeasurementUpdateResult(
+            position_accepted=position_accepted,
+            orientation_accepted=orientation_accepted,
+            position_innovation_m=position_innovation_m,
+            orientation_innovation_rad=orientation_innovation_rad,
+            z_axis_accepted=z_axis_accepted,
+            z_axis_angle_rad=z_axis_angle_rad,
+        )
+        if not result.accepted:
+            return result
+
+        residual = np.concatenate(
+            [
+                position_residual,
+                orientation_residual_vec,
+            ]
+        )
+
+        h = np.zeros((6, 12), dtype=float)
+        h[0:3, 0:3] = np.eye(3)
+        h[3:6, 6:9] = np.eye(3)
+
+        r = np.diag(
+            [
+                self.tuning.position_std**2,
+                self.tuning.position_std**2,
+                self.tuning.position_std**2,
+                self.tuning.orientation_std**2,
+                self.tuning.orientation_std**2,
+                self.tuning.orientation_std**2,
+            ]
+        )
+
+        pht = self.covariance @ h.T
+        s = h @ pht + r
+        kalman_gain = pht @ np.linalg.inv(s)
+        correction = kalman_gain @ residual
+
+        self.position = self.position + correction[0:3]
+        self.linear_velocity = self.linear_velocity + correction[3:6]
+        self.orientation = quat_normalize(
+            quat_multiply(quat_exp(correction[6:9]), self.orientation)
+        )
+        self.angular_velocity = self.angular_velocity + correction[9:12]
+
+        identity = np.eye(12, dtype=float)
+        ikh = identity - kalman_gain @ h
+        self.covariance = ikh @ self.covariance @ ikh.T + kalman_gain @ r @ kalman_gain.T
+        self.covariance = 0.5 * (self.covariance + self.covariance.T)
+        return result
+
+    @staticmethod
+    def _within_gate(value, limit):
+        return limit is None or limit <= 0.0 or value <= limit
+
+    def body_linear_velocity(self):
+        return quat_to_rotation_matrix(self.orientation).T @ self.linear_velocity
+
+    def body_angular_velocity(self):
+        return quat_to_rotation_matrix(self.orientation).T @ self.angular_velocity
+
+
+class BrovKfOdom(Node):
+    def __init__(self):
+        super().__init__("brov_kf_odom")
+
+        self.declare_parameter("pose_topic", "/mocap/mr_pinchy/pose")
+        self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_kf")
+        self.declare_parameter("parent_frame", "mocap")
+        self.declare_parameter("child_frame", "mr_pinchy/base_link_kf")
+        self.declare_parameter("publish_rate_hz", 20.0)
+        self.declare_parameter("publish_tf", True)
+        self.declare_parameter("max_coast_sec", 1.0)
+        self.declare_parameter("position_std", 0.01)
+        self.declare_parameter("orientation_std", 0.02)
+        self.declare_parameter("linear_accel_std", 0.5)
+        self.declare_parameter("angular_accel_std", 1.0)
+        self.declare_parameter("max_position_innovation_m", 0.25)
+        self.declare_parameter("max_orientation_innovation_rad", 0.75)
+        self.declare_parameter("max_base_link_z_axis_angle_rad", 0.75)
+        self.declare_parameter("max_rejected_samples", 10)
+
+        self._pose_topic = str(self.get_parameter("pose_topic").value)
+        self._odom_topic = str(self.get_parameter("odom_topic").value)
+        self._parent_frame = str(self.get_parameter("parent_frame").value)
+        self._child_frame = str(self.get_parameter("child_frame").value)
+        self._publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
+        self._publish_tf = bool(self.get_parameter("publish_tf").value)
+        self._max_coast_sec = float(self.get_parameter("max_coast_sec").value)
+        self._max_position_innovation_m = float(
+            self.get_parameter("max_position_innovation_m").value
+        )
+        self._max_orientation_innovation_rad = float(
+            self.get_parameter("max_orientation_innovation_rad").value
+        )
+        self._max_base_link_z_axis_angle_rad = float(
+            self.get_parameter("max_base_link_z_axis_angle_rad").value
+        )
+        self._max_rejected_samples = int(self.get_parameter("max_rejected_samples").value)
+
+        tuning = FilterTuning(
+            position_std=float(self.get_parameter("position_std").value),
+            orientation_std=float(self.get_parameter("orientation_std").value),
+            linear_accel_std=float(self.get_parameter("linear_accel_std").value),
+            angular_accel_std=float(self.get_parameter("angular_accel_std").value),
+        )
+        self._filter = QuaternionCvEkf(tuning=tuning)
+        self._last_filter_sec = None
+        self._last_pose_rx_sec = None
+        self._consecutive_full_rejections = 0
+
+        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        self._odom_pub = self.create_publisher(Odometry, self._odom_topic, qos)
+        self.create_subscription(PoseStamped, self._pose_topic, self._pose_cb, qos)
+        self._tf_broadcaster = TransformBroadcaster(self) if self._publish_tf else None
+
+        self.create_timer(1.0 / self._publish_rate_hz, self._tick)
+        self.get_logger().info(
+            f"brov_kf_odom: pose='{self._pose_topic}', odom='{self._odom_topic}', "
+            f"parent_frame='{self._parent_frame}', child_frame='{self._child_frame}', "
+            f"rate={self._publish_rate_hz:.1f}Hz, publish_tf={self._publish_tf}, "
+            f"max_coast={self._max_coast_sec:.2f}s, "
+            f"max_position_innovation={self._max_position_innovation_m:.3f}m, "
+            f"max_orientation_innovation={self._max_orientation_innovation_rad:.3f}rad, "
+            f"max_base_link_z_axis_angle={self._max_base_link_z_axis_angle_rad:.3f}rad"
+        )
+
+    def _pose_cb(self, msg):
+        now = time.monotonic()
+        position = np.array(
+            [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z],
+            dtype=float,
+        )
+        orientation = np.array(
+            [
+                msg.pose.orientation.x,
+                msg.pose.orientation.y,
+                msg.pose.orientation.z,
+                msg.pose.orientation.w,
+            ],
+            dtype=float,
+        )
+
+        if self._filter.initialized:
+            dt = now - self._last_filter_sec if self._last_filter_sec is not None else 0.0
+            self._filter.predict(dt)
+
+        result = self._filter.update(
+            position,
+            orientation,
+            max_position_innovation_m=self._max_position_innovation_m,
+            max_orientation_innovation_rad=self._max_orientation_innovation_rad,
+            max_base_link_z_axis_angle_rad=self._max_base_link_z_axis_angle_rad,
+        )
+        self._handle_update_result(result, position, orientation)
+
+        self._last_filter_sec = now
+        self._last_pose_rx_sec = now
+
+        frame_id = msg.header.frame_id
+        if frame_id and frame_id != self._parent_frame:
+            self.get_logger().warn(
+                f"Received pose in frame '{frame_id}', publishing odom in '{self._parent_frame}'.",
+                throttle_duration_sec=2.0,
+            )
+
+    def _handle_update_result(
+        self,
+        result,
+        position,
+        orientation,
+    ):
+        if result.accepted:
+            self._consecutive_full_rejections = 0
+            return
+
+        self._consecutive_full_rejections += 1
+        self.get_logger().warn(
+            "Rejected mocap pose outlier: "
+            f"position_innovation={result.position_innovation_m:.3f}m, "
+            f"orientation_innovation={result.orientation_innovation_rad:.3f}rad, "
+            f"z_axis_angle={result.z_axis_angle_rad:.3f}rad, "
+            f"z_axis_accepted={result.z_axis_accepted}, "
+            f"consecutive_rejections={self._consecutive_full_rejections}",
+            # throttle_duration_sec=1.0,
+        )
+        if (
+            self._max_rejected_samples > 0
+            and self._consecutive_full_rejections >= self._max_rejected_samples
+            and result.z_axis_accepted
+        ):
+            self._filter.initialize(position, orientation)
+            self._consecutive_full_rejections = 0
+            self.get_logger().warn(
+                "Reinitialized EKF after repeated mocap pose rejections.",
+                throttle_duration_sec=1.0,
+            )
+
+    def _reset_filter(self):
+        self._filter = QuaternionCvEkf(tuning=self._filter.tuning)
+        self._last_filter_sec = None
+        self._last_pose_rx_sec = None
+        self._consecutive_full_rejections = 0
+
+    def _tick(self):
+        if not self._filter.initialized or self._last_pose_rx_sec is None:
+            return
+        now = time.monotonic()
+        if (now - self._last_pose_rx_sec) > self._max_coast_sec:
+            self._reset_filter()
+            self.get_logger().warn(
+                "coasting for too long, reinitializing filter on next pose",
+                throttle_duration_sec=0.5,
+            )
+            return
+
+        dt = now - self._last_filter_sec if self._last_filter_sec is not None else 0.0
+        self._filter.predict(dt)
+        self._last_filter_sec = now
+
+        stamp = self.get_clock().now().to_msg()
+        odom_msg = self._odom_message(stamp)
+        self._odom_pub.publish(odom_msg)
+        if self._tf_broadcaster is not None:
+            self._tf_broadcaster.sendTransform(self._transform_message(stamp))
+
+    def _odom_message(self, stamp):
+        msg = Odometry()
+        msg.header.stamp = stamp
+        msg.header.frame_id = self._parent_frame
+        msg.child_frame_id = self._child_frame
+
+        msg.pose.pose.position.x = float(self._filter.position[0])
+        msg.pose.pose.position.y = float(self._filter.position[1])
+        msg.pose.pose.position.z = float(self._filter.position[2])
+        msg.pose.pose.orientation.x = float(self._filter.orientation[0])
+        msg.pose.pose.orientation.y = float(self._filter.orientation[1])
+        msg.pose.pose.orientation.z = float(self._filter.orientation[2])
+        msg.pose.pose.orientation.w = float(self._filter.orientation[3])
+
+        linear_body = self._filter.body_linear_velocity()
+        angular_body = self._filter.body_angular_velocity()
+        msg.twist.twist.linear.x = float(linear_body[0])
+        msg.twist.twist.linear.y = float(linear_body[1])
+        msg.twist.twist.linear.z = float(linear_body[2])
+        msg.twist.twist.angular.x = float(angular_body[0])
+        msg.twist.twist.angular.y = float(angular_body[1])
+        msg.twist.twist.angular.z = float(angular_body[2])
+
+        if hasattr(msg.pose, "covariance"):
+            pose_cov = np.zeros((6, 6), dtype=float)
+            pose_cov[0:3, 0:3] = self._filter.covariance[0:3, 0:3]
+            pose_cov[3:6, 3:6] = self._filter.covariance[6:9, 6:9]
+            msg.pose.covariance = pose_cov.reshape(-1).tolist()
+        if hasattr(msg.twist, "covariance"):
+            twist_cov = np.zeros((6, 6), dtype=float)
+            twist_cov[0:3, 0:3] = self._filter.covariance[3:6, 3:6]
+            twist_cov[3:6, 3:6] = self._filter.covariance[9:12, 9:12]
+            msg.twist.covariance = twist_cov.reshape(-1).tolist()
+
+        return msg
+
+    def _transform_message(self, stamp):
+        msg = TransformStamped()
+        msg.header.stamp = stamp
+        msg.header.frame_id = self._parent_frame
+        msg.child_frame_id = self._child_frame
+        msg.transform.translation.x = float(self._filter.position[0])
+        msg.transform.translation.y = float(self._filter.position[1])
+        msg.transform.translation.z = float(self._filter.position[2])
+        msg.transform.rotation.x = float(self._filter.orientation[0])
+        msg.transform.rotation.y = float(self._filter.orientation[1])
+        msg.transform.rotation.z = float(self._filter.orientation[2])
+        msg.transform.rotation.w = float(self._filter.orientation[3])
+        return msg
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = BrovKfOdom()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

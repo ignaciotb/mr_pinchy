@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -204,6 +205,16 @@ class StaticTransformBroadcaster:
         self.__class__.sent_transforms.append(transform)
 
 
+class TransformBroadcaster:
+    sent_transforms = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    def sendTransform(self, transform) -> None:
+        self.__class__.sent_transforms.append(transform)
+
+
 class TransformException(Exception):
     pass
 
@@ -265,6 +276,7 @@ sys.modules["tf2_geometry_msgs"] = tf2_geometry_msgs
 tf2_ros = types.ModuleType("tf2_ros")
 tf2_ros.Buffer = Buffer
 tf2_ros.StaticTransformBroadcaster = StaticTransformBroadcaster
+tf2_ros.TransformBroadcaster = TransformBroadcaster
 tf2_ros.TransformException = TransformException
 tf2_ros.TransformListener = TransformListener
 sys.modules["tf2_ros"] = tf2_ros
@@ -287,6 +299,16 @@ from mr_pinchy_interface.brov_ctrl_waypoint import (  # noqa: E402
     neutral_rc_override,
     pid_outputs_to_wrench,
 )
+from mr_pinchy_interface.brov_kf_odom import (  # noqa: E402
+    BrovKfOdom,
+    FilterTuning,
+    QuaternionCvEkf,
+    base_link_z_axis_angle_rad,
+    orientation_residual,
+    quat_exp,
+    quat_multiply,
+    quat_normalize,
+)
 
 
 def _make_twist_stamped(
@@ -304,6 +326,39 @@ def _make_twist_stamped(
     return msg
 
 
+def _quat_from_rpy(roll: float, pitch: float, yaw: float) -> tuple[float, float, float, float]:
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    return (
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    )
+
+
+def _make_pose_stamped(
+    *,
+    pos=(0.0, 0.0, 0.0),
+    quat=(0.0, 0.0, 0.0, 1.0),
+    frame_id="mocap",
+) -> PoseStamped:
+    msg = PoseStamped()
+    msg.header.frame_id = frame_id
+    msg.pose.position.x = pos[0]
+    msg.pose.position.y = pos[1]
+    msg.pose.position.z = pos[2]
+    msg.pose.orientation.x = quat[0]
+    msg.pose.orientation.y = quat[1]
+    msg.pose.orientation.z = quat[2]
+    msg.pose.orientation.w = quat[3]
+    return msg
+
+
 def _make_odom(
     *,
     pos=(0.0, 0.0, 0.0),
@@ -311,22 +366,16 @@ def _make_odom(
     linear=(0.0, 0.0, 0.0),
     angular=(0.0, 0.0, 0.0),
 ) -> Odometry:
-    roll, pitch, yaw = rpy
-    cr = math.cos(roll * 0.5)
-    sr = math.sin(roll * 0.5)
-    cp = math.cos(pitch * 0.5)
-    sp = math.sin(pitch * 0.5)
-    cy = math.cos(yaw * 0.5)
-    sy = math.sin(yaw * 0.5)
+    quat = _quat_from_rpy(*rpy)
 
     msg = Odometry()
     msg.pose.pose.position.x = pos[0]
     msg.pose.pose.position.y = pos[1]
     msg.pose.pose.position.z = pos[2]
-    msg.pose.pose.orientation.x = sr * cp * cy - cr * sp * sy
-    msg.pose.pose.orientation.y = cr * sp * cy + sr * cp * sy
-    msg.pose.pose.orientation.z = cr * cp * sy - sr * sp * cy
-    msg.pose.pose.orientation.w = cr * cp * cy + sr * sp * sy
+    msg.pose.pose.orientation.x = quat[0]
+    msg.pose.pose.orientation.y = quat[1]
+    msg.pose.pose.orientation.z = quat[2]
+    msg.pose.pose.orientation.w = quat[3]
     msg.twist.twist.linear.x = linear[0]
     msg.twist.twist.linear.y = linear[1]
     msg.twist.twist.linear.z = linear[2]
@@ -404,8 +453,8 @@ def test_twist_conversion_helpers_and_zero_tick_behavior() -> None:
     node = BrovTwistController()
     assert len(StaticTransformBroadcaster.sent_transforms) == 1
     transform = StaticTransformBroadcaster.sent_transforms[0]
-    assert transform.header.frame_id == "/mr_pinchy/base_link"
-    assert transform.child_frame_id == "/mr_pinchy/base_link_flu"
+    assert transform.header.frame_id == "mr_pinchy/base_link"
+    assert transform.child_frame_id == "mr_pinchy/base_link_flu"
     assert transform.transform.translation.x == 0.0
     assert transform.transform.translation.y == 0.0
     assert transform.transform.translation.z == 0.0
@@ -432,7 +481,182 @@ def test_twist_conversion_helpers_and_zero_tick_behavior() -> None:
     assert rc_msg.channels[:6] == [1500] * 6
 
 
+def test_kf_quaternion_helpers_use_shortest_orientation_error() -> None:
+    yaw_90 = quat_exp(np.array([0.0, 0.0, math.pi / 2.0]))
+    combined = quat_multiply(yaw_90, yaw_90)
+    yaw_180 = quat_exp(np.array([0.0, 0.0, math.pi]))
+
+    assert np.allclose(quat_normalize(combined), yaw_180, atol=1e-6)
+    assert np.allclose(orientation_residual(yaw_90, -yaw_90), np.zeros(3), atol=1e-6)
+
+    residual = orientation_residual(
+        quat_exp(np.array([0.0, 0.0, -math.pi + 0.1])),
+        quat_exp(np.array([0.0, 0.0, math.pi - 0.1])),
+    )
+    assert np.allclose(residual, [0.0, 0.0, 0.2], atol=1e-6)
+
+
+def test_kf_base_link_z_axis_angle_ignores_yaw_and_tracks_tilt() -> None:
+    assert base_link_z_axis_angle_rad(np.array([0.0, 0.0, 0.0, 1.0])) == 0.0
+    assert math.isclose(
+        base_link_z_axis_angle_rad(_quat_from_rpy(0.8, 0.0, 0.0)),
+        0.8,
+        abs_tol=1e-6,
+    )
+    assert math.isclose(
+        base_link_z_axis_angle_rad(_quat_from_rpy(0.0, -0.8, 0.0)),
+        0.8,
+        abs_tol=1e-6,
+    )
+    assert base_link_z_axis_angle_rad(_quat_from_rpy(0.0, 0.0, 1.2)) == 0.0
+
+
+def test_quaternion_cv_ekf_estimates_constant_velocity_motion() -> None:
+    ekf = QuaternionCvEkf(
+        FilterTuning(
+            position_std=0.01,
+            orientation_std=0.01,
+            linear_accel_std=0.2,
+            angular_accel_std=0.2,
+        )
+    )
+    linear_velocity = np.array([0.4, -0.2, 0.1], dtype=float)
+    angular_velocity = np.array([0.0, 0.0, 0.3], dtype=float)
+    dt = 0.05
+
+    ekf.initialize(np.zeros(3), np.array([0.0, 0.0, 0.0, 1.0]))
+    for step in range(1, 101):
+        t = step * dt
+        ekf.predict(dt)
+        ekf.update(linear_velocity * t, quat_exp(angular_velocity * t))
+
+    assert np.allclose(ekf.position, linear_velocity * 5.0, atol=0.02)
+    assert np.allclose(ekf.linear_velocity, linear_velocity, atol=0.03)
+    assert np.allclose(ekf.angular_velocity, angular_velocity, atol=0.03)
+    orientation_error = orientation_residual(quat_exp(angular_velocity * 5.0), ekf.orientation)
+    assert np.linalg.norm(orientation_error) < 0.02
+
+
+def test_quaternion_cv_ekf_rejects_full_pose_on_absurd_orientation_outlier() -> None:
+    ekf = QuaternionCvEkf()
+    ekf.initialize(np.zeros(3), np.array([0.0, 0.0, 0.0, 1.0]))
+
+    result = ekf.update(
+        np.array([0.02, 0.0, 0.0]),
+        quat_exp(np.array([0.0, 0.0, math.pi])),
+        max_position_innovation_m=0.25,
+        max_orientation_innovation_rad=0.75,
+    )
+
+    assert result.position_accepted
+    assert not result.orientation_accepted
+    assert not result.accepted
+    assert result.orientation_innovation_rad > 0.75
+    orientation_error = orientation_residual(
+        np.array([0.0, 0.0, 0.0, 1.0]),
+        ekf.orientation,
+    )
+    assert np.linalg.norm(orientation_error) < 1e-6
+    assert np.allclose(ekf.position, np.zeros(3))
+
+
+def test_quaternion_cv_ekf_rejects_absolute_z_axis_outlier() -> None:
+    ekf = QuaternionCvEkf()
+    tilted_orientation = _quat_from_rpy(0.8, 0.0, 0.0)
+    ekf.initialize(np.zeros(3), tilted_orientation)
+
+    result = ekf.update(
+        np.array([0.02, 0.0, 0.0]),
+        tilted_orientation,
+        max_position_innovation_m=0.25,
+        max_orientation_innovation_rad=0.75,
+        max_base_link_z_axis_angle_rad=0.75,
+    )
+
+    assert result.position_accepted
+    assert result.orientation_accepted
+    assert not result.z_axis_accepted
+    assert not result.accepted
+    assert result.z_axis_angle_rad > 0.75
+    assert np.allclose(ekf.position, np.zeros(3))
+    assert np.allclose(ekf.orientation, tilted_orientation)
+
+
+def test_kf_odom_node_publishes_expected_frames_and_tf() -> None:
+    TransformBroadcaster.sent_transforms.clear()
+    node = BrovKfOdom()
+    quat = _quat_from_rpy(0.0, 0.0, math.pi / 2.0)
+
+    node._pose_cb(_make_pose_stamped(pos=(1.0, 2.0, 3.0), quat=quat))
+    node._tick()
+
+    odom = node._odom_pub.messages[-1]
+    assert odom.header.frame_id == "mocap"
+    assert odom.child_frame_id == "mr_pinchy/base_link_kf"
+    assert odom.pose.pose.position.x == 1.0
+    assert odom.pose.pose.position.y == 2.0
+    assert odom.pose.pose.position.z == 3.0
+    assert np.allclose(
+        [
+            odom.pose.pose.orientation.x,
+            odom.pose.pose.orientation.y,
+            odom.pose.pose.orientation.z,
+            odom.pose.pose.orientation.w,
+        ],
+        quat,
+    )
+
+    transform = TransformBroadcaster.sent_transforms[-1]
+    assert transform.header.frame_id == "mocap"
+    assert transform.child_frame_id == "mr_pinchy/base_link_kf"
+    assert transform.transform.translation.x == 1.0
+    assert transform.transform.translation.y == 2.0
+    assert transform.transform.translation.z == 3.0
+
+
+def test_kf_odom_node_does_not_initialize_from_absolute_z_axis_outlier() -> None:
+    node = BrovKfOdom()
+    bad_quat = _quat_from_rpy(0.8, 0.0, 0.0)
+
+    node._pose_cb(_make_pose_stamped(pos=(1.0, 2.0, 3.0), quat=bad_quat))
+
+    assert not node._filter.initialized
+    assert node._consecutive_full_rejections == 1
+
+
+def test_kf_odom_node_does_not_reinitialize_from_absolute_z_axis_outliers() -> None:
+    node = BrovKfOdom()
+    node._max_orientation_innovation_rad = 1.0
+    node._max_rejected_samples = 2
+    good_quat = _quat_from_rpy(0.0, 0.0, 0.0)
+    bad_quat = _quat_from_rpy(0.8, 0.0, 0.0)
+    initial_position = np.array([1.0, 2.0, 3.0])
+
+    node._pose_cb(_make_pose_stamped(pos=initial_position, quat=good_quat))
+    node._pose_cb(_make_pose_stamped(pos=initial_position + np.array([0.01, 0.0, 0.0]), quat=bad_quat))
+    node._pose_cb(_make_pose_stamped(pos=initial_position + np.array([0.02, 0.0, 0.0]), quat=bad_quat))
+
+    assert node._filter.initialized
+    assert np.allclose(node._filter.orientation, good_quat)
+    assert not np.allclose(node._filter.orientation, bad_quat)
+    assert node._consecutive_full_rejections == 2
+
+
+def test_kf_odom_node_reinitializes_after_coast_timeout() -> None:
+    node = BrovKfOdom()
+    node._pose_cb(_make_pose_stamped(pos=(1.0, 2.0, 3.0)))
+
+    assert node._filter.initialized
+    node._last_pose_rx_sec = time.monotonic() - node._max_coast_sec - 0.1
+    node._tick()
+
+    assert not node._filter.initialized
+    assert node._last_filter_sec is None
+    assert node._last_pose_rx_sec is None
+
+
 def test_setup_entry_points_reference_current_modules() -> None:
     setup_text = Path(__file__).resolve().parents[1].joinpath("setup.py").read_text()
     assert "brov_ctrl_waypoint = mr_pinchy_interface.brov_ctrl_waypoint:main" in setup_text
     assert "brov_ctrl_twist = mr_pinchy_interface.brov_ctrl_twist:main" in setup_text
+    assert "brov_kf_odom = mr_pinchy_interface.brov_kf_odom:main" in setup_text

@@ -47,6 +47,7 @@ def velocity_feedback_wrench(
     nu_ref: np.ndarray,
     gains: np.ndarray,
 ) -> np.ndarray:
+    print(f"error: {nu_ref - nu}", flush=True)
     return np.asarray(gains * (nu_ref - nu), dtype=float)
 
 
@@ -70,8 +71,8 @@ class BrovTwistController(Node):
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom")
         self.declare_parameter("wrench_topic", "/mr_pinchy/cmd_wrench")
         self.declare_parameter("rc_topic", "/mavros/rc/override")
-        self.declare_parameter("base_link_frame", "/mr_pinchy/base_link")
-        self.declare_parameter("base_link_flu_frame", "/mr_pinchy/base_link_flu")
+        self.declare_parameter("base_link_frame", "mr_pinchy/base_link")
+        self.declare_parameter("base_link_flu_frame", "mr_pinchy/base_link_flu")
 
         cmd_topic = str(self.get_parameter("cmd_topic").value)
         odom_topic = str(self.get_parameter("odom_topic").value)
@@ -167,6 +168,7 @@ class BrovTwistController(Node):
 
     def _cmd_cb(self, msg: TwistStamped) -> None:
         self._last_cmd = msg
+        print(f"Cmd velocity linear x: {msg.twist.linear.x}, linear y: {msg.twist.linear.y}, linear z: {msg.twist.linear.z}, angular x: {msg.twist.angular.x}, angular y: {msg.twist.angular.y}, angular z: {msg.twist.angular.z}", flush=True)
 
     def _odom_cb(self, msg: Odometry) -> None:
         self._last_odom = msg
@@ -344,6 +346,10 @@ class BrovTwistController(Node):
             return
 
         self._publish_wrench_and_rc(tau)
+
+
+BrovCtrlSIWrench = BrovTwistController
+
 
 def main(args=None) -> None:
     rclpy.init(args=args)

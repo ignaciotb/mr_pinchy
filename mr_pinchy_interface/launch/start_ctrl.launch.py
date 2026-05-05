@@ -30,6 +30,13 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
     )
 
+    kf_odom = Node(
+        package="mr_pinchy_interface",
+        executable="brov_kf_odom",
+        name="brov_kf_odom",
+        output="screen",
+    )
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -41,7 +48,8 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             rviz_config_arg,
-            waypoint_controller,
+            kf_odom,
+            # waypoint_controller,
             # twist_controller,
             rviz_node,
         ]
