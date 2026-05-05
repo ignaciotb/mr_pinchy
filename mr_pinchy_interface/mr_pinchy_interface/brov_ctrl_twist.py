@@ -63,29 +63,35 @@ def clamp_body_wrench(
     return tau
 
 
+def normalize_tf_frame_id(frame_id: str) -> str:
+    return str(frame_id).lstrip("/")
+
+
 class BrovTwistController(Node):
     def __init__(self) -> None:
         super().__init__("brov_ctrl_si_wrench")
 
         self.declare_parameter("cmd_topic", "/mr_pinchy/cmd_vel")
-        self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom")
+        self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_kf")
         self.declare_parameter("wrench_topic", "/mr_pinchy/cmd_wrench")
         self.declare_parameter("rc_topic", "/mavros/rc/override")
-        self.declare_parameter("base_link_frame", "mr_pinchy/base_link")
+        self.declare_parameter("base_link_frame", "mr_pinchy/base_link_kf")
         self.declare_parameter("base_link_flu_frame", "mr_pinchy/base_link_flu")
 
         cmd_topic = str(self.get_parameter("cmd_topic").value)
         odom_topic = str(self.get_parameter("odom_topic").value)
         wrench_topic = str(self.get_parameter("wrench_topic").value)
         rc_topic = str(self.get_parameter("rc_topic").value)
-        self._base_link_frame = str(self.get_parameter("base_link_frame").value)
-        self._base_link_flu_frame = str(self.get_parameter("base_link_flu_frame").value)
-
+        self._base_link_frame = normalize_tf_frame_id(self.get_parameter("base_link_frame").value)
+        self._base_link_flu_frame = normalize_tf_frame_id(
+            self.get_parameter("base_link_flu_frame").value
+        )
+        self._debug_log = True
         self._publish_rate_hz = 20.0
         self._odom_timeout_sec = 0.3
-        self._k_u = 8.0
-        self._k_v = 8.0
-        self._k_w = 8.0
+        self._k_u = 50.0
+        self._k_v = 50.0
+        self._k_w = 50.0
         self._k_p = 2.0
         self._k_q = 2.0
         self._k_r = 2.0
@@ -176,8 +182,8 @@ class BrovTwistController(Node):
 
     def _lookup_transform(self, target_frame: str, source_frame: str):
         return self._tf_buffer.lookup_transform(
-            target_frame,
-            source_frame,
+            normalize_tf_frame_id(target_frame),
+            normalize_tf_frame_id(source_frame),
             rclpy.time.Time(),
             timeout=self._tf_timeout,
         )
@@ -189,6 +195,7 @@ class BrovTwistController(Node):
         source_frame: str,
         stamp=None,
     ) -> np.ndarray | None:
+        source_frame = normalize_tf_frame_id(source_frame)
         if source_frame == self._base_link_frame:
             return vector3_to_array(msg)
 
@@ -206,10 +213,10 @@ class BrovTwistController(Node):
         return vector3_to_array(transformed.vector)
 
     def _get_fossen_state(self, odom: Odometry) -> tuple[np.ndarray, np.ndarray] | None:
-        source_frame = getattr(odom, "child_frame_id", "")
+        source_frame = normalize_tf_frame_id(getattr(odom, "child_frame_id", ""))
         if not source_frame:
             raise ValueError("odometry child_frame_id is required")
-        world_frame = getattr(getattr(odom, "header", None), "frame_id", "")
+        world_frame = normalize_tf_frame_id(getattr(getattr(odom, "header", None), "frame_id", ""))
         stamp = getattr(getattr(odom, "header", None), "stamp", None)
 
         if source_frame == self._base_link_frame:
@@ -268,7 +275,7 @@ class BrovTwistController(Node):
         return eta, nu
 
     def _command_in_base_link(self, msg: TwistStamped) -> np.ndarray | None:
-        source_frame = msg.header.frame_id
+        source_frame = normalize_tf_frame_id(msg.header.frame_id)
         linear = self._transform_vector_to_base_link(
             msg.twist.linear,
             source_frame=source_frame,
@@ -312,6 +319,13 @@ class BrovTwistController(Node):
             neutral_pwm=self._neutral_pwm,
             delta_pwm=self._delta_pwm,
         )
+        if self._debug_log:
+            self.get_logger().info(
+                f"wrench=({wrench_msg.wrench.force.x:.3f}, {wrench_msg.wrench.force.y:.3f}, {wrench_msg.wrench.force.z:.3f}, {wrench_msg.wrench.torque.x:.3f}, {wrench_msg.wrench.torque.y:.3f}, {wrench_msg.wrench.torque.z:.3f})",
+            )
+            self.get_logger().info(
+                f"rc=({rc_msg.channels[0]}, {rc_msg.channels[1]}, {rc_msg.channels[2]}, {rc_msg.channels[3]}, {rc_msg.channels[4]}, {rc_msg.channels[5]})",
+            )
         self._wrench_pub.publish(wrench_msg)
         self._rc_pub.publish(rc_msg)
 

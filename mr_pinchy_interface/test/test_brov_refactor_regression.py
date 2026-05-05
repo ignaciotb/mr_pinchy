@@ -288,6 +288,7 @@ from mr_pinchy_interface.brov_ctrl_twist import (  # noqa: E402
     BrovCtrlSIWrench,
     BrovTwistController,
     body_wrench_message,
+    normalize_tf_frame_id,
     odom_to_body_state,
     twist_to_body_velocity,
 )
@@ -433,6 +434,26 @@ def test_twist_module_reexports_shared_helpers_and_alias() -> None:
     assert body_wrench_message is brov_utils.body_wrench_message
 
 
+def test_twist_controller_strips_leading_slash_from_tf_frames() -> None:
+    class _RecordingBuffer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def lookup_transform(self, target_frame, source_frame, *args, **kwargs):
+            self.calls.append((target_frame, source_frame))
+            return TransformStamped()
+
+    node = BrovTwistController()
+    buffer = _RecordingBuffer()
+    node._tf_buffer = buffer
+
+    assert normalize_tf_frame_id("/mr_pinchy/base_link_flu") == "mr_pinchy/base_link_flu"
+
+    node._lookup_transform("/mr_pinchy/base_link_kf", "/mr_pinchy/base_link_flu")
+
+    assert buffer.calls == [("mr_pinchy/base_link_kf", "mr_pinchy/base_link_flu")]
+
+
 def test_twist_conversion_helpers_and_zero_tick_behavior() -> None:
     StaticTransformBroadcaster.sent_transforms.clear()
 
@@ -453,7 +474,7 @@ def test_twist_conversion_helpers_and_zero_tick_behavior() -> None:
     node = BrovTwistController()
     assert len(StaticTransformBroadcaster.sent_transforms) == 1
     transform = StaticTransformBroadcaster.sent_transforms[0]
-    assert transform.header.frame_id == "mr_pinchy/base_link"
+    assert transform.header.frame_id == "mr_pinchy/base_link_kf"
     assert transform.child_frame_id == "mr_pinchy/base_link_flu"
     assert transform.transform.translation.x == 0.0
     assert transform.transform.translation.y == 0.0

@@ -50,7 +50,7 @@ def generate_launch_description() -> LaunchDescription:
             rviz_config_arg,
             kf_odom,
             # waypoint_controller,
-            # twist_controller,
+            twist_controller,
             rviz_node,
         ]
     )
