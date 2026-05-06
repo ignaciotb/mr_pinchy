@@ -45,10 +45,19 @@ def static_wrench_feedforward(eta: np.ndarray, nu_ref: np.ndarray) -> np.ndarray
 def velocity_feedback_wrench(
     nu: np.ndarray,
     nu_ref: np.ndarray,
-    gains: np.ndarray,
+    kp_gains: np.ndarray,
+    kd_gains: np.ndarray | None = None,
+    error_derivative: np.ndarray | None = None,
 ) -> np.ndarray:
-    print(f"error: {nu_ref - nu}", flush=True)
-    return np.asarray(gains * (nu_ref - nu), dtype=float)
+    error = nu_ref - nu
+    if kd_gains is None:
+        kd_gains = np.zeros_like(kp_gains, dtype=float)
+    if error_derivative is None:
+        error_derivative = np.zeros_like(error, dtype=float)
+
+    print(f"nu ref: {nu_ref}", flush=True)
+    print(f"error: {error}", flush=True)
+    return np.asarray(kp_gains * error + kd_gains * error_derivative, dtype=float)
 
 
 def clamp_body_wrench(
@@ -86,15 +95,21 @@ class BrovTwistController(Node):
         self._base_link_flu_frame = normalize_tf_frame_id(
             self.get_parameter("base_link_flu_frame").value
         )
-        self._debug_log = True
-        self._publish_rate_hz = 20.0
+        self._debug_log = False
+        self._publish_rate_hz = 30.0
         self._odom_timeout_sec = 0.3
         self._k_u = 50.0
         self._k_v = 50.0
         self._k_w = 50.0
         self._k_p = 2.0
         self._k_q = 2.0
-        self._k_r = 2.0
+        self._k_r = 4.0
+        self._kd_u = 1.0
+        self._kd_v = 1.0
+        self._kd_w = 0.0
+        self._kd_p = 0.0
+        self._kd_q = 0.0
+        self._kd_r = 0.0
         self._fx_max = 60.0
         self._fy_max = 60.0
         self._fz_max = 60.0
@@ -102,10 +117,10 @@ class BrovTwistController(Node):
         self._ty_max = 20.0
         self._tz_max = 20.0
         self._neutral_pwm = 1500
-        self._delta_pwm = 100
+        self._delta_pwm = 300
         self._tf_timeout = Duration(seconds=0.05)
 
-        self._gains = np.array(
+        self._kp_gains = np.array(
             [
                 self._k_u,
                 self._k_v,
@@ -113,6 +128,17 @@ class BrovTwistController(Node):
                 self._k_p,
                 self._k_q,
                 self._k_r,
+            ],
+            dtype=float,
+        )
+        self._kd_gains = np.array(
+            [
+                self._kd_u,
+                self._kd_v,
+                self._kd_w,
+                self._kd_p,
+                self._kd_q,
+                self._kd_r,
             ],
             dtype=float,
         )
@@ -148,6 +174,8 @@ class BrovTwistController(Node):
         self._last_odom: Odometry | None = None
         self._last_odom_rx_sec: float = 0.0
         self._nu_ref: np.ndarray | None = None
+        self._prev_velocity_error: np.ndarray | None = None
+        self._prev_feedback_sec: float | None = None
 
         self.create_timer(1.0 / self._publish_rate_hz, self._tick)
         self.get_logger().info(
@@ -290,16 +318,46 @@ class BrovTwistController(Node):
             return None
         return np.concatenate([linear, angular]).astype(float)
 
-    def _compute_control(self) -> np.ndarray | None:
+    def _reset_feedback_state(self) -> None:
+        self._prev_velocity_error = None
+        self._prev_feedback_sec = None
+
+    def _feedback_error_derivative(self, error: np.ndarray, now_sec: float) -> np.ndarray:
+        if self._prev_velocity_error is None or self._prev_feedback_sec is None:
+            derivative = np.zeros_like(error, dtype=float)
+        else:
+            dt = now_sec - self._prev_feedback_sec
+            if dt <= 1e-6:
+                derivative = np.zeros_like(error, dtype=float)
+            else:
+                derivative = (error - self._prev_velocity_error) / dt
+
+        self._prev_velocity_error = error.copy()
+        self._prev_feedback_sec = now_sec
+        return derivative
+
+    def _compute_control(self, feedback_time_sec: float | None = None) -> np.ndarray | None:
         if self._nu_ref is None or self._last_odom is None:
+            self._reset_feedback_state()
             return None
 
         state = self._get_fossen_state(self._last_odom)
         if state is None:
+            self._reset_feedback_state()
             return None
         eta, nu = state
-        tau_ff = static_wrench_feedforward(eta, self._nu_ref)
-        tau_fb = velocity_feedback_wrench(nu, self._nu_ref, self._gains)
+        tau_ff = static_wrench_feedforward(eta, nu)
+        error = self._nu_ref - nu
+        if feedback_time_sec is None:
+            feedback_time_sec = time.monotonic()
+        error_derivative = self._feedback_error_derivative(error, feedback_time_sec)
+        tau_fb = velocity_feedback_wrench(
+            nu,
+            self._nu_ref,
+            self._kp_gains,
+            self._kd_gains,
+            error_derivative,
+        )
         tau = tau_ff + tau_fb
         return clamp_body_wrench(
             tau,
@@ -337,10 +395,12 @@ class BrovTwistController(Node):
 
         if self._last_cmd is None:
             self._nu_ref = None
+            self._reset_feedback_state()
             self._publish_zero_wrench_and_rc()
             return
 
         if self._last_odom is None or (now - self._last_odom_rx_sec) > self._odom_timeout_sec:
+            self._reset_feedback_state()
             self._publish_zero_wrench_and_rc()
             if self._last_odom is not None:
                 self.get_logger().warn(
@@ -349,13 +409,21 @@ class BrovTwistController(Node):
                 )
             return
 
-        self._nu_ref = self._command_in_base_link(self._last_cmd)
-        if self._nu_ref is None:
+        nu_cmd = self._command_in_base_link(self._last_cmd)
+        if nu_cmd is None:
+            self._reset_feedback_state()
             self._publish_zero_wrench_and_rc()
             return
+        
+        alpha = 0.1
+        if self._nu_ref is None:
+            self._nu_ref = alpha * nu_cmd
+        else:
+            self._nu_ref = alpha * nu_cmd + (1 - alpha) * self._nu_ref
 
-        tau = self._compute_control()
+        tau = self._compute_control(now)
         if tau is None:
+            self._reset_feedback_state()
             self._publish_zero_wrench_and_rc()
             return
 

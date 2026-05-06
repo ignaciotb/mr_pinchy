@@ -283,7 +283,7 @@ sys.modules["tf2_ros"] = tf2_ros
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mr_pinchy_interface import brov_utils  # noqa: E402
+from mr_pinchy_interface import brov_ctrl_twist, brov_utils  # noqa: E402
 from mr_pinchy_interface.brov_ctrl_twist import (  # noqa: E402
     BrovCtrlSIWrench,
     BrovTwistController,
@@ -291,6 +291,7 @@ from mr_pinchy_interface.brov_ctrl_twist import (  # noqa: E402
     normalize_tf_frame_id,
     odom_to_body_state,
     twist_to_body_velocity,
+    velocity_feedback_wrench,
 )
 from mr_pinchy_interface.brov_ctrl_waypoint import (  # noqa: E402
     PIDAxis,
@@ -500,6 +501,93 @@ def test_twist_conversion_helpers_and_zero_tick_behavior() -> None:
         np.zeros(6),
     )
     assert rc_msg.channels[:6] == [1500] * 6
+
+
+def test_twist_velocity_feedback_keeps_p_behavior_when_kd_is_zero() -> None:
+    nu = np.array([1.0, -2.0, 0.5, 0.25, -0.5, 1.5])
+    nu_ref = np.array([2.0, -1.0, -0.5, 0.75, -1.0, 1.0])
+    kp_gains = np.array([10.0, 20.0, 30.0, 2.0, 3.0, 4.0])
+    kd_gains = np.zeros(6, dtype=float)
+    error_derivative = np.array([100.0, -100.0, 50.0, -50.0, 10.0, -10.0])
+
+    p_only = velocity_feedback_wrench(nu, nu_ref, kp_gains)
+    pd_with_zero_kd = velocity_feedback_wrench(
+        nu,
+        nu_ref,
+        kp_gains,
+        kd_gains,
+        error_derivative,
+    )
+
+    assert np.allclose(p_only, kp_gains * (nu_ref - nu))
+    assert np.allclose(pd_with_zero_kd, p_only)
+
+
+def test_twist_pd_feedback_uses_zero_derivative_then_error_derivative(monkeypatch) -> None:
+    monkeypatch.setattr(
+        brov_ctrl_twist,
+        "static_wrench_feedforward",
+        lambda eta, nu_ref: np.zeros(6, dtype=float),
+    )
+
+    node = BrovTwistController()
+    node._kp_gains = np.array([2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
+    node._kd_gains = np.array([0.5, 0.25, 0.75, 0.1, 0.2, 0.3])
+    node._force_limits = np.full(3, 1000.0)
+    node._torque_limits = np.full(3, 1000.0)
+    node._nu_ref = np.array([2.0, 1.0, -1.0, 0.5, -0.5, 1.5])
+
+    first_odom = _make_odom(
+        linear=(1.0, 0.5, -0.25),
+        angular=(0.1, -0.2, 0.3),
+    )
+    first_odom.header.frame_id = "ned"
+    first_odom.child_frame_id = node._base_link_frame
+    node._last_odom = first_odom
+
+    first_error = node._nu_ref - np.array([1.0, 0.5, -0.25, 0.1, -0.2, 0.3])
+    first_tau = node._compute_control(10.0)
+
+    assert np.allclose(first_tau, node._kp_gains * first_error)
+
+    second_odom = _make_odom(
+        linear=(0.0, 0.0, -0.5),
+        angular=(0.2, -0.1, 0.0),
+    )
+    second_odom.header.frame_id = "ned"
+    second_odom.child_frame_id = node._base_link_frame
+    node._last_odom = second_odom
+
+    second_error = node._nu_ref - np.array([0.0, 0.0, -0.5, 0.2, -0.1, 0.0])
+    error_derivative = (second_error - first_error) / 0.5
+    second_tau = node._compute_control(10.5)
+
+    assert np.allclose(
+        second_tau,
+        node._kp_gains * second_error + node._kd_gains * error_derivative,
+    )
+
+
+def test_twist_feedback_state_resets_when_tick_cannot_control() -> None:
+    node = BrovTwistController()
+    node._prev_velocity_error = np.ones(6, dtype=float)
+    node._prev_feedback_sec = 1.0
+
+    node._last_cmd = None
+    node._tick()
+
+    assert node._prev_velocity_error is None
+    assert node._prev_feedback_sec is None
+
+    node._last_cmd = _make_twist_stamped()
+    node._last_odom = None
+    node._prev_velocity_error = np.ones(6, dtype=float)
+    node._prev_feedback_sec = 1.0
+
+    node._tick()
+
+    assert node._prev_velocity_error is None
+    assert node._prev_feedback_sec is None
 
 
 def test_kf_quaternion_helpers_use_shortest_orientation_error() -> None:
