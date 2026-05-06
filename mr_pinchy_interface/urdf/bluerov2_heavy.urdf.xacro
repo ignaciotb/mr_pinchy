@@ -1,0 +1,463 @@
+<?xml version="1.0"?>
+<robot name="bluerov2_heavy" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="t200_thruster" params="index x y z roll pitch yaw mesh visual_rpy">
+    <link name="thruster${index}">
+      <visual>
+        <origin xyz="0 0 0" rpy="${visual_rpy}"/>
+        <geometry>
+          <mesh filename="${mesh}"/>
+        </geometry>
+        <material name="t200_prop_blue">
+          <color rgba="0.117647 0.419608 0.568627 1.0"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="0.002"/>
+        <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/>
+      </inertial>
+    </link>
+    <joint name="thruster${index}_joint" type="fixed">
+      <parent link="mr_pinchy/base_link_ekf_flu"/>
+      <child link="thruster${index}"/>
+      <origin xyz="${x} ${y} ${z}" rpy="${roll} ${pitch} ${yaw}"/>
+    </joint>
+  </xacro:macro>
+
+  <link name="mr_pinchy/base_link_ekf_flu">
+    <visual name="base_link_visual_00">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_244_244_244_1_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_244_244_244_1_001_1">
+        <color rgba="0.956863 0.956863 0.956863 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_01">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_255_0_0_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_255_0_0_001_1">
+        <color rgba="1.000000 0.000000 0.000000 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_02">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_25_25_25_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_25_25_25_001_1">
+        <color rgba="0.098039 0.098039 0.098039 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_03">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_198_193_188_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_198_193_188_001_1">
+        <color rgba="0.776471 0.756863 0.737255 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_04">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_64_64_64_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_64_64_64_001">
+        <color rgba="0.250980 0.250980 0.250980 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_05">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_202_209_238_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_202_209_238_001">
+        <color rgba="0.792157 0.819608 0.933333 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_06">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_53_53_53_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_53_53_53_001">
+        <color rgba="0.207843 0.207843 0.207843 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_07">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_75_75_75_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_75_75_75_001">
+        <color rgba="0.294118 0.294118 0.294118 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_08">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_255_255_255_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_255_255_255_001_1">
+        <color rgba="1.000000 1.000000 1.000000 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_09">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_194_197_143_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_194_197_143_001">
+        <color rgba="0.760784 0.772549 0.560784 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_10">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_192_192_192_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_192_192_192_001">
+        <color rgba="0.752941 0.752941 0.752941 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_11">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_255_242_232_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_255_242_232_001_1">
+        <color rgba="1.000000 0.949020 0.909804 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_12">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_244_229_167_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_244_229_167_001_1">
+        <color rgba="0.956863 0.898039 0.654902 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_13">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_244_244_244_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_244_244_244_001_1">
+        <color rgba="0.956863 0.956863 0.956863 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_14">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_215_208_192_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_215_208_192_001">
+        <color rgba="0.843137 0.815686 0.752941 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_15">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_38_153_208_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_38_153_208_001">
+        <color rgba="0.149020 0.600000 0.815686 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_16">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_110_115_110_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_110_115_110_001">
+        <color rgba="0.431373 0.450980 0.431373 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_17">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_229_234_237_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_229_234_237_001">
+        <color rgba="0.898039 0.917647 0.929412 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_18">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_251_250_245_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_251_250_245_001">
+        <color rgba="0.984314 0.980392 0.960784 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_19">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_30_107_145_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_30_107_145_001">
+        <color rgba="0.117647 0.419608 0.568627 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_20">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_239_239_239_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_239_239_239_001">
+        <color rgba="0.937255 0.937255 0.937255 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_21">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_43_153_207_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_43_153_207_001">
+        <color rgba="0.168627 0.600000 0.811765 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_22">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_178_178_178_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_178_178_178_001">
+        <color rgba="0.698039 0.698039 0.698039 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_23">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_255_255_255_1_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_255_255_255_1_001_1">
+        <color rgba="1.000000 1.000000 1.000000 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_24">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_89_89_89_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_89_89_89_001">
+        <color rgba="0.349020 0.349020 0.349020 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_25">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_199_174_130_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_199_174_130_001_1">
+        <color rgba="0.780392 0.682353 0.509804 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_26">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_117_87_44_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_117_87_44_001">
+        <color rgba="0.458824 0.341176 0.172549 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_27">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_5_110_17_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_5_110_17_001_1">
+        <color rgba="0.019608 0.431373 0.066667 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_28">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_1_43_147_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_1_43_147_001_1">
+        <color rgba="0.003922 0.168627 0.576471 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_29">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_94_65_19_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_94_65_19_001">
+        <color rgba="0.368627 0.254902 0.074510 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_30">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_60_60_60_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_60_60_60_001">
+        <color rgba="0.235294 0.235294 0.235294 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_31">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_45_45_45_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_45_45_45_001">
+        <color rgba="0.176471 0.176471 0.176471 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_32">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_150_146_134_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_150_146_134_001">
+        <color rgba="0.588235 0.572549 0.525490 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_33">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_26_26_26_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_26_26_26_001">
+        <color rgba="0.101961 0.101961 0.101961 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_34">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_255_206_127_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_255_206_127_001_1">
+        <color rgba="1.000000 0.807843 0.498039 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_35">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_214_119_94_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_214_119_94_001">
+        <color rgba="0.839216 0.466667 0.368627 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_36">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_0_128_0_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_0_128_0_001_1">
+        <color rgba="0.000000 0.501961 0.000000 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_37">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_255_192_0_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_255_192_0_001_1">
+        <color rgba="1.000000 0.752941 0.000000 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_38">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_73_169_84_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_73_169_84_001">
+        <color rgba="0.286275 0.662745 0.329412 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_39">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_255_239_35_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_255_239_35_001_1">
+        <color rgba="1.000000 0.937255 0.137255 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_40">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_0_0_0_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_0_0_0_001_1">
+        <color rgba="0.000000 0.000000 0.000000 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_41">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_131_131_131_001.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_131_131_131_001">
+        <color rgba="0.513725 0.513725 0.513725 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_42">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_25_25_25_1_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_25_25_25_1_001_1">
+        <color rgba="0.098039 0.098039 0.098039 1.0"/>
+      </material>
+    </visual>
+    <visual name="base_link_visual_43">
+      <origin xyz="0 0 0" rpy="1.570796 0 0"/>
+      <geometry>
+        <mesh filename="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/bluerov2_heavy_198_193_188_1_001_1.obj" scale="0.025 0.025 0.025"/>
+      </geometry>
+      <material name="bluerov2_heavy_198_193_188_1_001_1">
+        <color rgba="0.776471 0.756863 0.737255 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.457 0.575 0.05"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.011" rpy="0 0 0"/>
+      <mass value="13.0"/>
+      <inertia ixx="0.26" ixy="0" ixz="0" iyy="0.23" iyz="0" izz="0.37"/>
+    </inertial>
+  </link>
+
+  <xacro:t200_thruster index="1" x="0.14" y="-0.092" z="0.0"
+                      roll="-1.571" pitch="1.571" yaw="-0.785"
+                      mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_ccw_prop_30_107_145_004.obj" visual_rpy="0 0 0"/>
+  <xacro:t200_thruster index="2" x="0.14" y="0.092" z="0.0"
+                      roll="-1.571" pitch="1.571" yaw="-2.356"
+                      mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_ccw_prop_30_107_145_004.obj" visual_rpy="0 0 0"/>
+  <xacro:t200_thruster index="3" x="-0.14" y="-0.092" z="0.0"
+                      roll="-1.571" pitch="1.571" yaw="0.785"
+                      mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_cw_prop_30_107_145_003.obj" visual_rpy="3.142 0 0"/>
+  <xacro:t200_thruster index="4" x="-0.14" y="0.092" z="0.0"
+                      roll="-1.571" pitch="1.571" yaw="2.356"
+                      mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_cw_prop_30_107_145_003.obj" visual_rpy="3.142 0 0"/>
+  <xacro:t200_thruster index="5" x="0.118" y="-0.215" z="0.064"
+                      roll="0" pitch="0" yaw="0"
+                      mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_ccw_prop_30_107_145_004.obj" visual_rpy="0 0 1.571"/>
+  <xacro:t200_thruster index="6" x="0.118" y="0.215" z="0.064"
+                      roll="0" pitch="0" yaw="0"
+                      mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_cw_prop_30_107_145_003.obj" visual_rpy="3.142 0 1.571"/>
+  <xacro:t200_thruster index="7" x="-0.118" y="-0.215" z="0.064"
+                      roll="0" pitch="0" yaw="0"
+                      mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_cw_prop_30_107_145_003.obj" visual_rpy="3.142 0 1.571"/>
+  <xacro:t200_thruster index="8" x="-0.118" y="0.215" z="0.064"
+                      roll="0" pitch="0" yaw="0"
+                      mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_ccw_prop_30_107_145_004.obj" visual_rpy="0 0 1.571"/>
+
+</robot>

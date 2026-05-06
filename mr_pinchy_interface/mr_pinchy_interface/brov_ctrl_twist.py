@@ -54,8 +54,7 @@ def velocity_feedback_wrench(
         kd_gains = np.zeros_like(kp_gains, dtype=float)
     if error_derivative is None:
         error_derivative = np.zeros_like(error, dtype=float)
-
-    print(f"error: {error}", flush=True)
+    # print(f"error: {error}", flush=True)
     return np.asarray(kp_gains * error + kd_gains * error_derivative, dtype=float)
 
 
@@ -80,20 +79,17 @@ class BrovTwistController(Node):
         super().__init__("brov_ctrl_si_wrench")
 
         self.declare_parameter("cmd_topic", "/mr_pinchy/cmd_vel")
-        self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_kf")
+        self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_ekf")
         self.declare_parameter("wrench_topic", "/mr_pinchy/cmd_wrench")
         self.declare_parameter("rc_topic", "/mavros/rc/override")
-        self.declare_parameter("base_link_frame", "mr_pinchy/base_link_kf")
-        self.declare_parameter("base_link_flu_frame", "mr_pinchy/base_link_flu")
+        self.declare_parameter("base_link_frame", "mr_pinchy/base_link_ekf")
+        self.declare_parameter("base_link_flu_frame", "mr_pinchy/base_link_ekf_flu")
 
         cmd_topic = str(self.get_parameter("cmd_topic").value)
         odom_topic = str(self.get_parameter("odom_topic").value)
         wrench_topic = str(self.get_parameter("wrench_topic").value)
         rc_topic = str(self.get_parameter("rc_topic").value)
         self._base_link_frame = normalize_tf_frame_id(self.get_parameter("base_link_frame").value)
-        self._base_link_flu_frame = normalize_tf_frame_id(
-            self.get_parameter("base_link_flu_frame").value
-        )
         self._debug_log = False
         self._publish_rate_hz = 30.0
         self._odom_timeout_sec = 0.3
@@ -166,8 +162,6 @@ class BrovTwistController(Node):
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
-        self._static_tf_broadcaster = StaticTransformBroadcaster(self)
-        self._publish_static_body_frames()
 
         self._last_cmd: TwistStamped | None = None
         self._last_odom: Odometry | None = None
@@ -180,28 +174,12 @@ class BrovTwistController(Node):
         self.get_logger().info(
             f"brov_ctrl_twist: cmd='{cmd_topic}', odom='{odom_topic}', "
             f"wrench='{wrench_topic}', rc='{rc_topic}', base_link_frd='{self._base_link_frame}', "
-            f"base_link_flu='{self._base_link_flu_frame}', static_tf=published, "
             f"rate={self._publish_rate_hz:.1f}Hz"
         )
 
-    def _publish_static_body_frames(self) -> None:
-        transform = TransformStamped()
-        transform.header.stamp = self.get_clock().now().to_msg()
-        transform.header.frame_id = self._base_link_frame
-        transform.child_frame_id = self._base_link_flu_frame
-        transform.transform.translation.x = 0.0
-        transform.transform.translation.y = 0.0
-        transform.transform.translation.z = 0.0
-        # FRD -> FLU is a 180 degree rotation about +X with coincident origins.
-        transform.transform.rotation.x = 1.0
-        transform.transform.rotation.y = 0.0
-        transform.transform.rotation.z = 0.0
-        transform.transform.rotation.w = 0.0
-        self._static_tf_broadcaster.sendTransform(transform)
-
     def _cmd_cb(self, msg: TwistStamped) -> None:
         self._last_cmd = msg
-        print(f"Cmd velocity linear x: {msg.twist.linear.x}, linear y: {msg.twist.linear.y}, linear z: {msg.twist.linear.z}, angular x: {msg.twist.angular.x}, angular y: {msg.twist.angular.y}, angular z: {msg.twist.angular.z}", flush=True)
+        # print(f"Cmd velocity linear x: {msg.twist.linear.x}, linear y: {msg.twist.linear.y}, linear z: {msg.twist.linear.z}, angular x: {msg.twist.angular.x}, angular y: {msg.twist.angular.y}, angular z: {msg.twist.angular.z}", flush=True)
 
     def _odom_cb(self, msg: Odometry) -> None:
         self._last_odom = msg

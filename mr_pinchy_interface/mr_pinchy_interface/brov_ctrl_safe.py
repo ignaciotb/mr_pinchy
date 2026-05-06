@@ -29,7 +29,7 @@ device = "cuda" if jax.lib.xla_bridge.get_backend().platform == "cuda" else "cpu
 jax.config.update("jax_platform_name", device)
 
 
-ROBOT_RADIUS = 0.1
+ROBOT_RADIUS = 0.4
 OBS_RADIUS = 0.5
 GAMMA_COLAV = 5.0
 kappa = 100.0
@@ -114,21 +114,18 @@ def filter_single_integrator_velocity(
     )
     a = np.asarray(a_jax, dtype=float).reshape(3)
     b = float(np.asarray(b_jax, dtype=float))
-
     u = cp.Variable(3)
-    problem = cp.Problem(
-        cp.Minimize(0.5 * cp.sum_squares(u - reference_velocity)),
-        [a @ u >= b],
-    )
-    try:
-        problem.solve(solver=cp.OSQP, warm_start=True)
-    except cp.error.SolverError:
-        try:
-            problem.solve(warm_start=True)
-        except cp.error.SolverError:
-            return None
-
+    slack = cp.Variable(1, nonneg=True)
+    cost = cp.Minimize(0.5 * cp.sum_squares(u - reference_velocity) + 1000.0 * slack)
+    constraint = []
+    input_limit = 0.2
+    constraint.append(a @ u >= b + slack)
+    constraint.append(u >= -input_limit)
+    constraint.append(u <= input_limit)
+    problem = cp.Problem(cost, constraint)
+    problem.solve(solver=cp.OSQP, warm_start=True)
     if problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE) or u.value is None:
+        print(f"QP failed: {problem.status}")
         return None
     return np.asarray(u.value, dtype=float).reshape(3)
 
@@ -139,10 +136,10 @@ class BrovCtrlSafe(Node):
 
         self.declare_parameter("input_cmd_topic", "/mr_pinchy/cmd_vel_teleop")
         self.declare_parameter("output_cmd_topic", "/mr_pinchy/cmd_vel")
-        self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_kf")
+        self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_ekf")
         self.declare_parameter("map_frame", "map")
-        self.declare_parameter("base_link_flu_frame", "mr_pinchy/base_link_flu")
-        self.declare_parameter("obstacle_position", [0.0, 3.0, -2.0])
+        self.declare_parameter("base_link_flu_frame", "mr_pinchy/base_link_ekf_flu")
+        self.declare_parameter("obstacle_position", [0.0, 4.5, -1.0])
         self.declare_parameter("obstacle_radius", OBS_RADIUS)
         self.declare_parameter("robot_radius", ROBOT_RADIUS)
         self.declare_parameter("publish_rate_hz", 30.0)
@@ -179,7 +176,6 @@ class BrovCtrlSafe(Node):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._last_cmd: TwistStamped | None = None
-        self._last_cmd_rx_sec: float = 0.0
         self._last_odom: Odometry | None = None
         self._last_odom_rx_sec: float = 0.0
 
@@ -197,7 +193,6 @@ class BrovCtrlSafe(Node):
 
     def _cmd_cb(self, msg: TwistStamped) -> None:
         self._last_cmd = msg
-        self._last_cmd_rx_sec = time.monotonic()
 
     def _odom_cb(self, msg: Odometry) -> None:
         self._last_odom = msg
@@ -272,8 +267,7 @@ class BrovCtrlSafe(Node):
 
     def _safe_linear_velocity_in_map(self, cmd: TwistStamped, odom: Odometry) -> np.ndarray | None:
         cmd_frame = normalize_tf_frame_id(cmd.header.frame_id)
-        if not cmd_frame:
-            cmd_frame = self._base_link_flu_frame
+        assert cmd_frame is not None
 
         reference_velocity = self._transform_vector(
             cmd.twist.linear,
@@ -282,10 +276,18 @@ class BrovCtrlSafe(Node):
             stamp=cmd.header.stamp,
         )
         if reference_velocity is None:
+            self.get_logger().warn(
+                f"Command velocity transformation failed; publishing zero command.",
+                throttle_duration_sec=2.0,
+            )
             return None
 
         robot_position = self._robot_position_in_map(odom)
         if robot_position is None:
+            self.get_logger().warn(
+                f"Robot position transformation failed; publishing zero command.",
+                throttle_duration_sec=2.0,
+            )
             return None
 
         return filter_single_integrator_velocity(
@@ -359,13 +361,8 @@ class BrovCtrlSafe(Node):
         now = time.monotonic()
         self._publish_obstacle_marker()
 
-        if self._last_cmd is None or (now - self._last_cmd_rx_sec) > self._cmd_timeout_sec:
+        if self._last_cmd is None:
             self._cmd_pub.publish(self._zero_command())
-            if self._last_cmd is not None:
-                self.get_logger().warn(
-                    f"Command timeout ({self._cmd_timeout_sec:.2f}s); publishing zero command.",
-                    throttle_duration_sec=2.0,
-                )
             return
 
         if self._last_odom is None or (now - self._last_odom_rx_sec) > self._odom_timeout_sec:

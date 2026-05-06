@@ -342,7 +342,7 @@ from mr_pinchy_interface.brov_ctrl_safe import (  # noqa: E402
     BrovCtrlSafe,
     filter_single_integrator_velocity,
 )
-from mr_pinchy_interface.brov_kf_odom import (  # noqa: E402
+from mr_pinchy_interface.brov_odom_ekf import (  # noqa: E402
     BrovEKFOdom,
     QuaternionCvEkf,
     base_link_z_axis_angle_rad,
@@ -503,9 +503,9 @@ def test_twist_controller_strips_leading_slash_from_tf_frames() -> None:
 
     assert normalize_tf_frame_id("/mr_pinchy/base_link_flu") == "mr_pinchy/base_link_flu"
 
-    node._lookup_transform("/mr_pinchy/base_link_kf", "/mr_pinchy/base_link_flu")
+    node._lookup_transform("/mr_pinchy/base_link_ekf", "/mr_pinchy/base_link_flu")
 
-    assert buffer.calls == [("mr_pinchy/base_link_kf", "mr_pinchy/base_link_flu")]
+    assert buffer.calls == [("mr_pinchy/base_link_ekf", "mr_pinchy/base_link_flu")]
 
 
 def test_twist_conversion_helpers_and_zero_tick_behavior() -> None:
@@ -528,7 +528,7 @@ def test_twist_conversion_helpers_and_zero_tick_behavior() -> None:
     node = BrovTwistController()
     assert len(StaticTransformBroadcaster.sent_transforms) == 1
     transform = StaticTransformBroadcaster.sent_transforms[0]
-    assert transform.header.frame_id == "mr_pinchy/base_link_kf"
+    assert transform.header.frame_id == "mr_pinchy/base_link_ekf"
     assert transform.child_frame_id == "mr_pinchy/base_link_flu"
     assert transform.transform.translation.x == 0.0
     assert transform.transform.translation.y == 0.0
@@ -643,7 +643,7 @@ def test_twist_feedback_state_resets_when_tick_cannot_control() -> None:
     assert node._prev_feedback_sec is None
 
 
-def test_kf_quaternion_helpers_use_shortest_orientation_error() -> None:
+def test_ekf_quaternion_helpers_use_shortest_orientation_error() -> None:
     yaw_90 = quat_exp(np.array([0.0, 0.0, math.pi / 2.0]))
     combined = quat_multiply(yaw_90, yaw_90)
     yaw_180 = quat_exp(np.array([0.0, 0.0, math.pi]))
@@ -658,7 +658,7 @@ def test_kf_quaternion_helpers_use_shortest_orientation_error() -> None:
     assert np.allclose(residual, [0.0, 0.0, 0.2], atol=1e-6)
 
 
-def test_kf_base_link_z_axis_angle_ignores_yaw_and_tracks_tilt() -> None:
+def test_ekf_base_link_z_axis_angle_ignores_yaw_and_tracks_tilt() -> None:
     assert base_link_z_axis_angle_rad(np.array([0.0, 0.0, 0.0, 1.0])) == 0.0
     assert math.isclose(
         base_link_z_axis_angle_rad(_quat_from_rpy(0.8, 0.0, 0.0)),
@@ -766,7 +766,7 @@ def test_quaternion_cv_ekf_rejects_absolute_z_axis_outlier() -> None:
     assert np.allclose(ekf.orientation, tilted_orientation)
 
 
-def test_kf_odom_node_publishes_expected_frames_and_tf() -> None:
+def test_ekf_odom_node_publishes_expected_frames_and_tf() -> None:
     TransformBroadcaster.sent_transforms.clear()
     node = BrovEKFOdom()
     quat = _quat_from_rpy(0.0, 0.0, math.pi / 2.0)
@@ -776,7 +776,7 @@ def test_kf_odom_node_publishes_expected_frames_and_tf() -> None:
 
     odom = node._odom_pub.messages[-1]
     assert odom.header.frame_id == "mocap"
-    assert odom.child_frame_id == "mr_pinchy/base_link_kf"
+    assert odom.child_frame_id == "mr_pinchy/base_link_ekf"
     assert odom.pose.pose.position.x == 1.0
     assert odom.pose.pose.position.y == 2.0
     assert odom.pose.pose.position.z == 3.0
@@ -792,13 +792,13 @@ def test_kf_odom_node_publishes_expected_frames_and_tf() -> None:
 
     transform = TransformBroadcaster.sent_transforms[-1]
     assert transform.header.frame_id == "mocap"
-    assert transform.child_frame_id == "mr_pinchy/base_link_kf"
+    assert transform.child_frame_id == "mr_pinchy/base_link_ekf"
     assert transform.transform.translation.x == 1.0
     assert transform.transform.translation.y == 2.0
     assert transform.transform.translation.z == 3.0
 
 
-def test_kf_odom_node_does_not_initialize_from_absolute_z_axis_outlier() -> None:
+def test_ekf_odom_node_does_not_initialize_from_absolute_z_axis_outlier() -> None:
     node = BrovEKFOdom()
     bad_quat = _quat_from_rpy(0.8, 0.0, 0.0)
 
@@ -808,7 +808,7 @@ def test_kf_odom_node_does_not_initialize_from_absolute_z_axis_outlier() -> None
     assert node._consecutive_full_rejections == 1
 
 
-def test_kf_odom_node_resets_after_repeated_z_axis_unsafe_rejections() -> None:
+def test_ekf_odom_node_resets_after_repeated_z_axis_unsafe_rejections() -> None:
     """Repeated z-axis-unsafe rejections must fully reset, not reinit with bad data."""
     node = BrovEKFOdom()
     node._max_rejected_samples = 2
@@ -824,7 +824,7 @@ def test_kf_odom_node_resets_after_repeated_z_axis_unsafe_rejections() -> None:
     assert node._consecutive_full_rejections == 0
 
 
-def test_kf_odom_node_reinitializes_after_repeated_z_axis_safe_rejections() -> None:
+def test_ekf_odom_node_reinitializes_after_repeated_z_axis_safe_rejections() -> None:
     """Repeated rejections from innovation gate (but z-axis OK) should reinitialize."""
     node = BrovEKFOdom()
     node._max_rejected_samples = 2
@@ -898,7 +898,7 @@ def test_quaternion_cv_ekf_pose_update_rollback_on_z_axis_violation() -> None:
         assert np.allclose(ekf.orientation, orientation_before)
 
 
-def test_kf_odom_node_reinitializes_after_coast_timeout() -> None:
+def test_ekf_odom_node_reinitializes_after_coast_timeout() -> None:
     node = BrovEKFOdom()
     node._pose_cb(_make_pose_stamped(pos=(1.0, 2.0, 3.0)))
 
@@ -911,7 +911,7 @@ def test_kf_odom_node_reinitializes_after_coast_timeout() -> None:
     assert node._last_pose_rx_sec is None
 
 
-def test_kf_odom_node_imu_does_not_initialize_filter() -> None:
+def test_ekf_odom_node_imu_does_not_initialize_filter() -> None:
     node = BrovEKFOdom()
 
     node._imu_cb(_make_imu(angular=(0.0, 0.0, 0.5)))
@@ -920,7 +920,7 @@ def test_kf_odom_node_imu_does_not_initialize_filter() -> None:
     assert node._last_pose_rx_sec is None
 
 
-def test_kf_odom_node_fuses_imu_gyro_after_mocap_initialization() -> None:
+def test_ekf_odom_node_fuses_imu_gyro_after_mocap_initialization() -> None:
     node = BrovEKFOdom()
     node._pose_cb(_make_pose_stamped())
     last_pose_rx_sec = node._last_pose_rx_sec
@@ -1010,4 +1010,4 @@ def test_setup_entry_points_reference_current_modules() -> None:
     assert "brov_ctrl_waypoint = mr_pinchy_interface.brov_ctrl_waypoint:main" in setup_text
     assert "brov_ctrl_safe = mr_pinchy_interface.brov_ctrl_safe:main" in setup_text
     assert "brov_ctrl_twist = mr_pinchy_interface.brov_ctrl_twist:main" in setup_text
-    assert "brov_kf_odom = mr_pinchy_interface.brov_kf_odom:main" in setup_text
+    assert "brov_ekf_odom = mr_pinchy_interface.brov_ekf_odom:main" in setup_text

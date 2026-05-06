@@ -18,6 +18,11 @@ setup(
             glob('launch/*.launch.py'),
         ),
         (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
+        (os.path.join('share', package_name, 'urdf'), glob('urdf/*.urdf.xacro')),
+        (os.path.join('share', package_name, 'urdf', 'bluerov2_heavy', 'meshes'),
+            glob('urdf/bluerov2_heavy/meshes/*.obj') +
+            glob('urdf/bluerov2_heavy/meshes/*.mtl') +
+            glob('urdf/bluerov2_heavy/meshes/*.dae')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

@@ -10,7 +10,7 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu
-from tf2_ros import TransformBroadcaster
+from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster
 
 
 def quat_normalize(q):
@@ -390,17 +390,18 @@ class QuaternionCvEkf:
 
 class BrovEKFOdom(Node):
     def __init__(self):
-        super().__init__("brov_kf_odom")
+        super().__init__("brov_odom_ekf")
 
         self.declare_parameter("pose_topic", "/mocap/mr_pinchy/pose")
-        self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_kf")
+        self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_ekf")
         self.declare_parameter("imu_topic", "/mavros/imu/data")
         self.declare_parameter("parent_frame", "mocap")
-        self.declare_parameter("child_frame", "mr_pinchy/base_link_kf")
+        self.declare_parameter("child_frame", "mr_pinchy/base_link_ekf")
+        self.declare_parameter("child_frame_flu", "mr_pinchy/base_link_ekf_flu")
         self.declare_parameter("publish_rate_hz", 20.0)
         self.declare_parameter("publish_tf", True)
         self.declare_parameter("use_imu_gyro", False)
-        self.declare_parameter("max_coast_sec", 2.0)
+        self.declare_parameter("max_coast_sec", 1.0)
         self.declare_parameter("max_rejected_samples", 10)
 
         self._pose_topic = str(self.get_parameter("pose_topic").value)
@@ -408,6 +409,7 @@ class BrovEKFOdom(Node):
         self._imu_topic = str(self.get_parameter("imu_topic").value)
         self._parent_frame = str(self.get_parameter("parent_frame").value)
         self._child_frame = str(self.get_parameter("child_frame").value)
+        self._child_frame_flu = str(self.get_parameter("child_frame_flu").value)
         self._publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
         self._publish_tf = bool(self.get_parameter("publish_tf").value)
         self._use_imu_gyro = bool(self.get_parameter("use_imu_gyro").value)
@@ -425,10 +427,12 @@ class BrovEKFOdom(Node):
         if self._use_imu_gyro:
             self.create_subscription(Imu, self._imu_topic, self._imu_cb, qos)
         self._tf_broadcaster = TransformBroadcaster(self) if self._publish_tf else None
+        self._static_tf_broadcaster = StaticTransformBroadcaster(self)
+        self._publish_static_body_frames()
 
         self.create_timer(1.0 / self._publish_rate_hz, self._tick)
         self.get_logger().info(
-            f"brov_kf_odom: pose='{self._pose_topic}', odom='{self._odom_topic}', "
+            f"brov_odom_ekf: pose='{self._pose_topic}', odom='{self._odom_topic}', "
             f"imu='{self._imu_topic}', use_imu_gyro={self._use_imu_gyro}, "
             f"parent_frame='{self._parent_frame}', child_frame='{self._child_frame}', "
             f"rate={self._publish_rate_hz:.1f}Hz, publish_tf={self._publish_tf}, "
@@ -440,6 +444,21 @@ class BrovEKFOdom(Node):
             f"max_gyro_innovation={self._filter.max_gyro_innovation_rad_s:.3f}rad/s, "
             "imu_frame_assumption='base_link aligned with EKF body axes'"
         )
+    
+    def _publish_static_body_frames(self) -> None:
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = self._child_frame
+        transform.child_frame_id = self._child_frame_flu
+        transform.transform.translation.x = 0.0
+        transform.transform.translation.y = 0.0
+        transform.transform.translation.z = 0.0
+        # FRD -> FLU is a 180 degree rotation about +X with coincident origins.
+        transform.transform.rotation.x = 1.0
+        transform.transform.rotation.y = 0.0
+        transform.transform.rotation.z = 0.0
+        transform.transform.rotation.w = 0.0
+        self._static_tf_broadcaster.sendTransform(transform)
 
     def _pose_cb(self, msg):
         now = time.monotonic()

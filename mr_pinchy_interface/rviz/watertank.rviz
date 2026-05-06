@@ -10,9 +10,8 @@ Panels:
         - /Grid1/Offset1
         - /TF1/Frames1
         - /TF1/Tree1
-        - /Odometry2
       Splitter Ratio: 0.5820895433425903
-    Tree Height: 542
+    Tree Height: 363
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -81,7 +80,9 @@ Visualization Manager:
           Value: false
         mr_pinchy/base_link:
           Value: false
-        mr_pinchy/base_link_kf:
+        mr_pinchy/base_link_ekf:
+          Value: true
+        mr_pinchy/base_link_ekf_flu:
           Value: true
         mr_pinchy/dvl_frame:
           Value: false
@@ -181,8 +182,9 @@ Visualization Manager:
                     {}
                   thruster8:
                     {}
-                mr_pinchy/base_link_kf:
-                  {}
+                mr_pinchy/base_link_ekf:
+                  mr_pinchy/base_link_ekf_flu:
+                    {}
       Update Interval: 0
       Value: true
     - Angle Tolerance: 0.10000000149011612
@@ -261,8 +263,92 @@ Visualization Manager:
         Filter size: 1
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /mocap/mr_pinchy/odom_kf
+        Value: /mocap/mr_pinchy/odom_ekf
       Value: false
+    - Alpha: 1
+      Class: rviz_default_plugins/RobotModel
+      Collision Enabled: false
+      Description File: ""
+      Description Source: Topic
+      Description Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot_description
+      Enabled: true
+      Links:
+        All Links Enabled: true
+        Expand Joint Details: false
+        Expand Link Details: false
+        Expand Tree: false
+        Link Tree Style: Links in Alphabetic Order
+        mr_pinchy/base_link_ekf_flu:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        thruster1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        thruster2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        thruster3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        thruster4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        thruster5:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        thruster6:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        thruster7:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        thruster8:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+      Mass Properties:
+        Inertia: false
+        Mass: false
+      Name: RobotModel
+      TF Prefix: ""
+      Update Interval: 0
+      Value: true
+      Visual Enabled: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Obstacle
+      Namespaces:
+        mr_pinchy_safety: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /mr_pinchy/safety/obstacle_marker
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -309,25 +395,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 6.865119457244873
+      Distance: 7.148403167724609
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.4616536498069763
-        Y: 3.127056360244751
-        Z: 3.8366880416870117
+        X: 2.5685582160949707
+        Y: 3.110499620437622
+        Z: 1.5505938529968262
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.4597963094711304
+      Pitch: 0.6497968435287476
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz_default_plugins)
-      Yaw: 4.844893455505371
+      Yaw: 5.624887466430664
     Saved: ~
 Window Geometry:
   Displays:
