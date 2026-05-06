@@ -55,7 +55,6 @@ def velocity_feedback_wrench(
     if error_derivative is None:
         error_derivative = np.zeros_like(error, dtype=float)
 
-    print(f"nu ref: {nu_ref}", flush=True)
     print(f"error: {error}", flush=True)
     return np.asarray(kp_gains * error + kd_gains * error_derivative, dtype=float)
 

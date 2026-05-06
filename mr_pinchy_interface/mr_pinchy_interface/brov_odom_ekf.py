@@ -9,6 +9,7 @@ from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import Imu
 from tf2_ros import TransformBroadcaster
 
 
@@ -93,49 +94,28 @@ def base_link_z_axis_angle_rad(q):
     return float(math.acos(dot))
 
 
-class FilterTuning:
+class QuaternionCvEkf:
     def __init__(
         self,
         position_std=0.01,
         orientation_std=0.02,
         linear_accel_std=0.5,
         angular_accel_std=1.0,
+        gyro_std=0.05,
+        max_position_innovation_m=0.25,
+        max_orientation_innovation_rad=0.75,
+        max_base_link_z_axis_angle_rad=0.4,
+        max_gyro_innovation_rad_s=2.0,
     ):
         self.position_std = position_std
         self.orientation_std = orientation_std
         self.linear_accel_std = linear_accel_std
         self.angular_accel_std = angular_accel_std
-
-
-class MeasurementUpdateResult:
-    def __init__(
-        self,
-        position_accepted,
-        orientation_accepted,
-        position_innovation_m,
-        orientation_innovation_rad,
-        z_axis_accepted=True,
-        z_axis_angle_rad=0.0,
-    ):
-        self.position_accepted = position_accepted
-        self.orientation_accepted = orientation_accepted
-        self.position_innovation_m = position_innovation_m
-        self.orientation_innovation_rad = orientation_innovation_rad
-        self.z_axis_accepted = z_axis_accepted
-        self.z_axis_angle_rad = z_axis_angle_rad
-
-    @property
-    def accepted(self):
-        return (
-            self.position_accepted
-            and self.orientation_accepted
-            and self.z_axis_accepted
-        )
-
-
-class QuaternionCvEkf:
-    def __init__(self, tuning=None):
-        self.tuning = tuning if tuning is not None else FilterTuning()
+        self.gyro_std = gyro_std
+        self.max_position_innovation_m = max_position_innovation_m
+        self.max_orientation_innovation_rad = max_orientation_innovation_rad
+        self.max_base_link_z_axis_angle_rad = max_base_link_z_axis_angle_rad
+        self.max_gyro_innovation_rad_s = max_gyro_innovation_rad_s
         self.position = np.zeros(3, dtype=float)
         self.linear_velocity = np.zeros(3, dtype=float)
         self.orientation = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
@@ -150,15 +130,15 @@ class QuaternionCvEkf:
         self.angular_velocity = np.zeros(3, dtype=float)
         self.covariance = np.diag(
             [
-                self.tuning.position_std**2,
-                self.tuning.position_std**2,
-                self.tuning.position_std**2,
+                self.position_std**2,
+                self.position_std**2,
+                self.position_std**2,
                 1.0,
                 1.0,
                 1.0,
-                self.tuning.orientation_std**2,
-                self.tuning.orientation_std**2,
-                self.tuning.orientation_std**2,
+                self.orientation_std**2,
+                self.orientation_std**2,
+                self.orientation_std**2,
                 1.0,
                 1.0,
                 1.0,
@@ -173,6 +153,8 @@ class QuaternionCvEkf:
         if dt <= 1e-9:
             return
 
+        snap = self._snapshot()
+
         self.position = self.position + self.linear_velocity * dt
         delta_q = quat_exp(self.angular_velocity * dt)
         self.orientation = quat_normalize(quat_multiply(delta_q, self.orientation))
@@ -182,8 +164,8 @@ class QuaternionCvEkf:
         f[6:9, 9:12] = np.eye(3) * dt
 
         q = np.zeros((12, 12), dtype=float)
-        linear_accel_var = self.tuning.linear_accel_std**2
-        angular_accel_var = self.tuning.angular_accel_std**2
+        linear_accel_var = self.linear_accel_std**2
+        angular_accel_var = self.angular_accel_std**2
         q[0:3, 0:3] = np.eye(3) * linear_accel_var * (dt**4) / 4.0
         q[0:3, 3:6] = np.eye(3) * linear_accel_var * (dt**3) / 2.0
         q[3:6, 0:3] = q[0:3, 3:6]
@@ -196,63 +178,33 @@ class QuaternionCvEkf:
         self.covariance = f @ self.covariance @ f.T + q
         self.covariance = 0.5 * (self.covariance + self.covariance.T)
 
+        if not self._orientation_z_safe():
+            self._restore(snap)
+
     def update(
         self,
         position_meas,
         orientation_meas,
-        *,
-        max_position_innovation_m=None,
-        max_orientation_innovation_rad=None,
-        max_base_link_z_axis_angle_rad=None,
     ):
-        orientation_meas = quat_normalize(orientation_meas)
-        z_axis_angle_rad = base_link_z_axis_angle_rad(orientation_meas)
-        z_axis_accepted = self._within_gate(
-            z_axis_angle_rad,
-            max_base_link_z_axis_angle_rad,
+        (
+            accepted,
+            position_residual,
+            orientation_residual_vec,
+        ) = self._check_pose_measurement(
+            position_meas,
+            orientation_meas,
         )
+        orientation_meas = quat_normalize(orientation_meas)
 
         if not self.initialized:
-            result = MeasurementUpdateResult(
-                position_accepted=True,
-                orientation_accepted=True,
-                position_innovation_m=0.0,
-                orientation_innovation_rad=0.0,
-                z_axis_accepted=z_axis_accepted,
-                z_axis_angle_rad=z_axis_angle_rad,
-            )
-            if result.accepted:
+            if accepted:
                 self.initialize(position_meas, orientation_meas)
-            return result
+            return accepted
 
-        position_meas = np.asarray(position_meas, dtype=float)
-        position_residual = position_meas - self.position
-        orientation_residual_vec = orientation_residual(
-            orientation_meas,
-            self.orientation,
-        )
-        position_innovation_m = float(np.linalg.norm(position_residual))
-        orientation_innovation_rad = float(np.linalg.norm(orientation_residual_vec))
+        if not accepted:
+            return False
 
-        position_accepted = self._within_gate(
-            position_innovation_m,
-            max_position_innovation_m,
-        )
-        orientation_accepted = self._within_gate(
-            orientation_innovation_rad,
-            max_orientation_innovation_rad,
-        )
-
-        result = MeasurementUpdateResult(
-            position_accepted=position_accepted,
-            orientation_accepted=orientation_accepted,
-            position_innovation_m=position_innovation_m,
-            orientation_innovation_rad=orientation_innovation_rad,
-            z_axis_accepted=z_axis_accepted,
-            z_axis_angle_rad=z_axis_angle_rad,
-        )
-        if not result.accepted:
-            return result
+        snap = self._snapshot()
 
         residual = np.concatenate(
             [
@@ -267,12 +219,12 @@ class QuaternionCvEkf:
 
         r = np.diag(
             [
-                self.tuning.position_std**2,
-                self.tuning.position_std**2,
-                self.tuning.position_std**2,
-                self.tuning.orientation_std**2,
-                self.tuning.orientation_std**2,
-                self.tuning.orientation_std**2,
+                self.position_std**2,
+                self.position_std**2,
+                self.position_std**2,
+                self.orientation_std**2,
+                self.orientation_std**2,
+                self.orientation_std**2,
             ]
         )
 
@@ -292,7 +244,138 @@ class QuaternionCvEkf:
         ikh = identity - kalman_gain @ h
         self.covariance = ikh @ self.covariance @ ikh.T + kalman_gain @ r @ kalman_gain.T
         self.covariance = 0.5 * (self.covariance + self.covariance.T)
-        return result
+
+        if not self._orientation_z_safe():
+            self._restore(snap)
+            return False
+        return True
+
+    def _check_pose_measurement(
+        self,
+        position_meas,
+        orientation_meas,
+    ):
+        orientation_meas = quat_normalize(orientation_meas)
+        z_axis_angle_rad = base_link_z_axis_angle_rad(orientation_meas)
+        z_axis_accepted = self._within_gate(
+            z_axis_angle_rad,
+            self.max_base_link_z_axis_angle_rad,
+        )
+
+        if not self.initialized:
+            return z_axis_accepted, np.zeros(3, dtype=float), np.zeros(3, dtype=float)
+
+        position_meas = np.asarray(position_meas, dtype=float)
+        position_residual = position_meas - self.position
+        orientation_residual_vec = orientation_residual(
+            orientation_meas,
+            self.orientation,
+        )
+        position_innovation_m = float(np.linalg.norm(position_residual))
+        orientation_innovation_rad = float(np.linalg.norm(orientation_residual_vec))
+
+        position_accepted = self._within_gate(
+            position_innovation_m,
+            self.max_position_innovation_m,
+        )
+        orientation_accepted = self._within_gate(
+            orientation_innovation_rad,
+            self.max_orientation_innovation_rad,
+        )
+
+        accepted = (
+            position_accepted and orientation_accepted and z_axis_accepted
+        )
+        return accepted, position_residual, orientation_residual_vec
+
+    def reset_copy(self):
+        return QuaternionCvEkf(
+            position_std=self.position_std,
+            orientation_std=self.orientation_std,
+            linear_accel_std=self.linear_accel_std,
+            angular_accel_std=self.angular_accel_std,
+            gyro_std=self.gyro_std,
+            max_position_innovation_m=self.max_position_innovation_m,
+            max_orientation_innovation_rad=self.max_orientation_innovation_rad,
+            max_base_link_z_axis_angle_rad=self.max_base_link_z_axis_angle_rad,
+            max_gyro_innovation_rad_s=self.max_gyro_innovation_rad_s,
+        )
+
+    def update_body_angular_velocity(
+        self,
+        angular_velocity_body_meas,
+    ):
+        if not self.initialized:
+            return False
+
+        angular_velocity_body_meas = np.asarray(
+            angular_velocity_body_meas,
+            dtype=float,
+        )
+        angular_velocity_world_meas = (
+            quat_to_rotation_matrix(self.orientation) @ angular_velocity_body_meas
+        )
+        residual = angular_velocity_world_meas - self.angular_velocity
+        innovation_rad_s = float(np.linalg.norm(residual))
+        accepted = self._within_gate(
+            innovation_rad_s,
+            self.max_gyro_innovation_rad_s,
+        )
+        if not accepted:
+            return False
+
+        snap = self._snapshot()
+
+        h = np.zeros((3, 12), dtype=float)
+        h[:, 9:12] = np.eye(3)
+        r = np.eye(3, dtype=float) * self.gyro_std**2
+
+        pht = self.covariance @ h.T
+        s = h @ pht + r
+        kalman_gain = pht @ np.linalg.inv(s)
+        correction = kalman_gain @ residual
+
+        self.position = self.position + correction[0:3]
+        self.linear_velocity = self.linear_velocity + correction[3:6]
+        self.orientation = quat_normalize(
+            quat_multiply(quat_exp(correction[6:9]), self.orientation)
+        )
+        self.angular_velocity = self.angular_velocity + correction[9:12]
+
+        identity = np.eye(12, dtype=float)
+        ikh = identity - kalman_gain @ h
+        self.covariance = ikh @ self.covariance @ ikh.T + kalman_gain @ r @ kalman_gain.T
+        self.covariance = 0.5 * (self.covariance + self.covariance.T)
+
+        if not self._orientation_z_safe():
+            self._restore(snap)
+            return False
+        return True
+
+    def _snapshot(self):
+        return (
+            self.position.copy(),
+            self.linear_velocity.copy(),
+            self.orientation.copy(),
+            self.angular_velocity.copy(),
+            self.covariance.copy(),
+        )
+
+    def _restore(self, snapshot, orientation_only=True):
+        if orientation_only:
+            self.orientation = snapshot[2]
+            self.angular_velocity = snapshot[3]
+        else:
+            self.position = snapshot[0]
+            self.linear_velocity = snapshot[1]
+            self.orientation = snapshot[2]
+            self.angular_velocity = snapshot[3]
+            self.covariance = snapshot[4]
+
+    def _orientation_z_safe(self):
+        if self.max_base_link_z_axis_angle_rad is None or self.max_base_link_z_axis_angle_rad <= 0.0:
+            return True
+        return base_link_z_axis_angle_rad(self.orientation) <= self.max_base_link_z_axis_angle_rad
 
     @staticmethod
     def _within_gate(value, limit):
@@ -305,51 +388,33 @@ class QuaternionCvEkf:
         return quat_to_rotation_matrix(self.orientation).T @ self.angular_velocity
 
 
-class BrovKfOdom(Node):
+class BrovEKFOdom(Node):
     def __init__(self):
         super().__init__("brov_kf_odom")
 
         self.declare_parameter("pose_topic", "/mocap/mr_pinchy/pose")
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_kf")
+        self.declare_parameter("imu_topic", "/mavros/imu/data")
         self.declare_parameter("parent_frame", "mocap")
         self.declare_parameter("child_frame", "mr_pinchy/base_link_kf")
         self.declare_parameter("publish_rate_hz", 20.0)
         self.declare_parameter("publish_tf", True)
-        self.declare_parameter("max_coast_sec", 1.0)
-        self.declare_parameter("position_std", 0.01)
-        self.declare_parameter("orientation_std", 0.02)
-        self.declare_parameter("linear_accel_std", 0.5)
-        self.declare_parameter("angular_accel_std", 1.0)
-        self.declare_parameter("max_position_innovation_m", 0.25)
-        self.declare_parameter("max_orientation_innovation_rad", 0.75)
-        self.declare_parameter("max_base_link_z_axis_angle_rad", 0.75)
+        self.declare_parameter("use_imu_gyro", False)
+        self.declare_parameter("max_coast_sec", 2.0)
         self.declare_parameter("max_rejected_samples", 10)
 
         self._pose_topic = str(self.get_parameter("pose_topic").value)
         self._odom_topic = str(self.get_parameter("odom_topic").value)
+        self._imu_topic = str(self.get_parameter("imu_topic").value)
         self._parent_frame = str(self.get_parameter("parent_frame").value)
         self._child_frame = str(self.get_parameter("child_frame").value)
         self._publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
         self._publish_tf = bool(self.get_parameter("publish_tf").value)
+        self._use_imu_gyro = bool(self.get_parameter("use_imu_gyro").value)
         self._max_coast_sec = float(self.get_parameter("max_coast_sec").value)
-        self._max_position_innovation_m = float(
-            self.get_parameter("max_position_innovation_m").value
-        )
-        self._max_orientation_innovation_rad = float(
-            self.get_parameter("max_orientation_innovation_rad").value
-        )
-        self._max_base_link_z_axis_angle_rad = float(
-            self.get_parameter("max_base_link_z_axis_angle_rad").value
-        )
         self._max_rejected_samples = int(self.get_parameter("max_rejected_samples").value)
 
-        tuning = FilterTuning(
-            position_std=float(self.get_parameter("position_std").value),
-            orientation_std=float(self.get_parameter("orientation_std").value),
-            linear_accel_std=float(self.get_parameter("linear_accel_std").value),
-            angular_accel_std=float(self.get_parameter("angular_accel_std").value),
-        )
-        self._filter = QuaternionCvEkf(tuning=tuning)
+        self._filter = QuaternionCvEkf()
         self._last_filter_sec = None
         self._last_pose_rx_sec = None
         self._consecutive_full_rejections = 0
@@ -357,17 +422,23 @@ class BrovKfOdom(Node):
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self._odom_pub = self.create_publisher(Odometry, self._odom_topic, qos)
         self.create_subscription(PoseStamped, self._pose_topic, self._pose_cb, qos)
+        if self._use_imu_gyro:
+            self.create_subscription(Imu, self._imu_topic, self._imu_cb, qos)
         self._tf_broadcaster = TransformBroadcaster(self) if self._publish_tf else None
 
         self.create_timer(1.0 / self._publish_rate_hz, self._tick)
         self.get_logger().info(
             f"brov_kf_odom: pose='{self._pose_topic}', odom='{self._odom_topic}', "
+            f"imu='{self._imu_topic}', use_imu_gyro={self._use_imu_gyro}, "
             f"parent_frame='{self._parent_frame}', child_frame='{self._child_frame}', "
             f"rate={self._publish_rate_hz:.1f}Hz, publish_tf={self._publish_tf}, "
             f"max_coast={self._max_coast_sec:.2f}s, "
-            f"max_position_innovation={self._max_position_innovation_m:.3f}m, "
-            f"max_orientation_innovation={self._max_orientation_innovation_rad:.3f}rad, "
-            f"max_base_link_z_axis_angle={self._max_base_link_z_axis_angle_rad:.3f}rad"
+            f"max_position_innovation={self._filter.max_position_innovation_m:.3f}m, "
+            f"max_orientation_innovation={self._filter.max_orientation_innovation_rad:.3f}rad, "
+            f"max_base_link_z_axis_angle={self._filter.max_base_link_z_axis_angle_rad:.3f}rad, "
+            f"gyro_std={self._filter.gyro_std:.3f}rad/s, "
+            f"max_gyro_innovation={self._filter.max_gyro_innovation_rad_s:.3f}rad/s, "
+            "imu_frame_assumption='base_link aligned with EKF body axes'"
         )
 
     def _pose_cb(self, msg):
@@ -390,14 +461,11 @@ class BrovKfOdom(Node):
             dt = now - self._last_filter_sec if self._last_filter_sec is not None else 0.0
             self._filter.predict(dt)
 
-        result = self._filter.update(
+        accepted = self._filter.update(
             position,
             orientation,
-            max_position_innovation_m=self._max_position_innovation_m,
-            max_orientation_innovation_rad=self._max_orientation_innovation_rad,
-            max_base_link_z_axis_angle_rad=self._max_base_link_z_axis_angle_rad,
         )
-        self._handle_update_result(result, position, orientation)
+        self._handle_update_result(accepted, position, orientation)
 
         self._last_filter_sec = now
         self._last_pose_rx_sec = now
@@ -409,40 +477,82 @@ class BrovKfOdom(Node):
                 throttle_duration_sec=2.0,
             )
 
+    def _imu_cb(self, msg):
+        if not self._use_imu_gyro or not self._filter.initialized:
+            return
+
+        frame_id = msg.header.frame_id
+        if frame_id and frame_id != "base_link":
+            self.get_logger().warn(
+                "Received IMU gyro in frame "
+                f"'{frame_id}', expected 'base_link' aligned with EKF body axes.",
+                throttle_duration_sec=2.0,
+            )
+
+        now = time.monotonic()
+        dt = now - self._last_filter_sec if self._last_filter_sec is not None else 0.0
+        self._filter.predict(dt)
+
+        angular_velocity_body = np.array(
+            [
+                msg.angular_velocity.x,
+                msg.angular_velocity.y,
+                msg.angular_velocity.z,
+            ],
+            dtype=float,
+        )
+        accepted = self._filter.update_body_angular_velocity(angular_velocity_body)
+        if not accepted:
+            self.get_logger().warn(
+                "Rejected IMU gyro outlier: "
+                f"max_gyro_innovation={self._filter.max_gyro_innovation_rad_s:.3f}rad/s",
+                throttle_duration_sec=1.0,
+            )
+
+        self._last_filter_sec = now
+
     def _handle_update_result(
         self,
-        result,
+        accepted,
         position,
         orientation,
     ):
-        if result.accepted:
+        if accepted:
             self._consecutive_full_rejections = 0
             return
 
         self._consecutive_full_rejections += 1
         self.get_logger().warn(
             "Rejected mocap pose outlier: "
-            f"position_innovation={result.position_innovation_m:.3f}m, "
-            f"orientation_innovation={result.orientation_innovation_rad:.3f}rad, "
-            f"z_axis_angle={result.z_axis_angle_rad:.3f}rad, "
-            f"z_axis_accepted={result.z_axis_accepted}, "
             f"consecutive_rejections={self._consecutive_full_rejections}",
-            # throttle_duration_sec=1.0,
+            throttle_duration_sec=1.0,
         )
-        if (
-            self._max_rejected_samples > 0
-            and self._consecutive_full_rejections >= self._max_rejected_samples
-            and result.z_axis_accepted
-        ):
-            self._filter.initialize(position, orientation)
-            self._consecutive_full_rejections = 0
-            self.get_logger().warn(
-                "Reinitialized EKF after repeated mocap pose rejections.",
-                throttle_duration_sec=1.0,
-            )
+        # if (
+        #     self._max_rejected_samples > 0
+        #     and self._consecutive_full_rejections >= self._max_rejected_samples
+        # ):
+        #     z_angle = base_link_z_axis_angle_rad(quat_normalize(orientation))
+        #     z_safe = self._filter._within_gate(
+        #         z_angle, self._filter.max_base_link_z_axis_angle_rad
+        #     )
+        #     if z_safe:
+        #         self._filter.initialize(position, orientation)
+        #         self._consecutive_full_rejections = 0
+        #         self.get_logger().warn(
+        #             "Reinitialized EKF after repeated mocap pose rejections.",
+        #             throttle_duration_sec=1.0,
+        #         )
+        #     else:
+        #         self._reset_filter()
+        #         self.get_logger().warn(
+        #             "Reset EKF after repeated rejections (z-axis unsafe, "
+        #             f"angle={z_angle:.3f}rad > "
+        #             f"limit={self._filter.max_base_link_z_axis_angle_rad:.3f}rad).",
+        #             throttle_duration_sec=1.0,
+        #         )
 
     def _reset_filter(self):
-        self._filter = QuaternionCvEkf(tuning=self._filter.tuning)
+        self._filter = self._filter.reset_copy()
         self._last_filter_sec = None
         self._last_pose_rx_sec = None
         self._consecutive_full_rejections = 0
@@ -455,7 +565,6 @@ class BrovKfOdom(Node):
             self._reset_filter()
             self.get_logger().warn(
                 "coasting for too long, reinitializing filter on next pose",
-                throttle_duration_sec=0.5,
             )
             return
 
@@ -522,7 +631,7 @@ class BrovKfOdom(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = BrovKfOdom()
+    node = BrovEKFOdom()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

@@ -74,6 +74,14 @@ class TwistStamped:
         self.twist = _Twist()
 
 
+class Imu:
+    def __init__(self) -> None:
+        self.header = _Header()
+        self.orientation = _Quaternion()
+        self.angular_velocity = _Vector3()
+        self.linear_acceleration = _Vector3()
+
+
 class Vector3Stamped:
     def __init__(self) -> None:
         self.header = _Header()
@@ -91,6 +99,21 @@ class OverrideRCIn:
 
     def __init__(self) -> None:
         self.channels = []
+
+
+class Marker:
+    SPHERE = 2
+    ADD = 0
+
+    def __init__(self) -> None:
+        self.header = _Header()
+        self.ns = ""
+        self.id = 0
+        self.type = 0
+        self.action = 0
+        self.pose = _Pose()
+        self.scale = _Vector3()
+        self.color = types.SimpleNamespace(r=0.0, g=0.0, b=0.0, a=0.0)
 
 
 class Odometry:
@@ -248,6 +271,20 @@ nav_msgs.msg = nav_msgs_msg
 sys.modules["nav_msgs"] = nav_msgs
 sys.modules["nav_msgs.msg"] = nav_msgs_msg
 
+sensor_msgs = types.ModuleType("sensor_msgs")
+sensor_msgs_msg = types.ModuleType("sensor_msgs.msg")
+sensor_msgs_msg.Imu = Imu
+sensor_msgs.msg = sensor_msgs_msg
+sys.modules["sensor_msgs"] = sensor_msgs
+sys.modules["sensor_msgs.msg"] = sensor_msgs_msg
+
+visualization_msgs = types.ModuleType("visualization_msgs")
+visualization_msgs_msg = types.ModuleType("visualization_msgs.msg")
+visualization_msgs_msg.Marker = Marker
+visualization_msgs.msg = visualization_msgs_msg
+sys.modules["visualization_msgs"] = visualization_msgs
+sys.modules["visualization_msgs.msg"] = visualization_msgs_msg
+
 rclpy = types.ModuleType("rclpy")
 rclpy.init = lambda *args, **kwargs: None
 rclpy.shutdown = lambda *args, **kwargs: None
@@ -301,9 +338,12 @@ from mr_pinchy_interface.brov_ctrl_waypoint import (  # noqa: E402
     neutral_rc_override,
     pid_outputs_to_wrench,
 )
+from mr_pinchy_interface.brov_ctrl_safe import (  # noqa: E402
+    BrovCtrlSafe,
+    filter_single_integrator_velocity,
+)
 from mr_pinchy_interface.brov_kf_odom import (  # noqa: E402
-    BrovKfOdom,
-    FilterTuning,
+    BrovEKFOdom,
     QuaternionCvEkf,
     base_link_z_axis_angle_rad,
     orientation_residual,
@@ -358,6 +398,19 @@ def _make_pose_stamped(
     msg.pose.orientation.y = quat[1]
     msg.pose.orientation.z = quat[2]
     msg.pose.orientation.w = quat[3]
+    return msg
+
+
+def _make_imu(
+    *,
+    angular=(0.0, 0.0, 0.0),
+    frame_id="base_link",
+) -> Imu:
+    msg = Imu()
+    msg.header.frame_id = frame_id
+    msg.angular_velocity.x = angular[0]
+    msg.angular_velocity.y = angular[1]
+    msg.angular_velocity.z = angular[2]
     return msg
 
 
@@ -620,14 +673,26 @@ def test_kf_base_link_z_axis_angle_ignores_yaw_and_tracks_tilt() -> None:
     assert base_link_z_axis_angle_rad(_quat_from_rpy(0.0, 0.0, 1.2)) == 0.0
 
 
+def test_quaternion_cv_ekf_rejects_pose_with_default_gates() -> None:
+    ekf = QuaternionCvEkf()
+    ekf.initialize(np.zeros(3), np.array([0.0, 0.0, 0.0, 1.0]))
+
+    accepted = ekf.update(
+        np.array([0.02, 0.0, 0.0]),
+        quat_exp(np.array([0.0, 0.0, math.pi])),
+    )
+
+    assert not accepted
+    assert np.allclose(ekf.position, np.zeros(3))
+    assert np.allclose(ekf.orientation, [0.0, 0.0, 0.0, 1.0])
+
+
 def test_quaternion_cv_ekf_estimates_constant_velocity_motion() -> None:
     ekf = QuaternionCvEkf(
-        FilterTuning(
-            position_std=0.01,
-            orientation_std=0.01,
-            linear_accel_std=0.2,
-            angular_accel_std=0.2,
-        )
+        position_std=0.01,
+        orientation_std=0.01,
+        linear_accel_std=0.2,
+        angular_accel_std=0.2,
     )
     linear_velocity = np.array([0.4, -0.2, 0.1], dtype=float)
     angular_velocity = np.array([0.0, 0.0, 0.3], dtype=float)
@@ -646,21 +711,38 @@ def test_quaternion_cv_ekf_estimates_constant_velocity_motion() -> None:
     assert np.linalg.norm(orientation_error) < 0.02
 
 
+def test_quaternion_cv_ekf_fuses_body_gyro_as_world_angular_velocity() -> None:
+    ekf = QuaternionCvEkf(gyro_std=0.01)
+    yaw_90 = _quat_from_rpy(0.0, 0.0, math.pi / 2.0)
+    ekf.initialize(np.zeros(3), yaw_90)
+
+    accepted = ekf.update_body_angular_velocity(np.array([0.4, 0.0, 0.0]))
+
+    assert accepted
+    assert np.allclose(ekf.angular_velocity, [0.0, 0.4, 0.0], atol=0.01)
+    assert np.allclose(ekf.body_angular_velocity(), [0.4, 0.0, 0.0], atol=0.01)
+
+
+def test_quaternion_cv_ekf_rejects_body_gyro_outlier() -> None:
+    ekf = QuaternionCvEkf(gyro_std=0.01)
+    ekf.initialize(np.zeros(3), np.array([0.0, 0.0, 0.0, 1.0]))
+
+    accepted = ekf.update_body_angular_velocity(np.array([3.0, 0.0, 0.0]))
+
+    assert not accepted
+    assert np.allclose(ekf.angular_velocity, np.zeros(3))
+
+
 def test_quaternion_cv_ekf_rejects_full_pose_on_absurd_orientation_outlier() -> None:
     ekf = QuaternionCvEkf()
     ekf.initialize(np.zeros(3), np.array([0.0, 0.0, 0.0, 1.0]))
 
-    result = ekf.update(
+    accepted = ekf.update(
         np.array([0.02, 0.0, 0.0]),
         quat_exp(np.array([0.0, 0.0, math.pi])),
-        max_position_innovation_m=0.25,
-        max_orientation_innovation_rad=0.75,
     )
 
-    assert result.position_accepted
-    assert not result.orientation_accepted
-    assert not result.accepted
-    assert result.orientation_innovation_rad > 0.75
+    assert not accepted
     orientation_error = orientation_residual(
         np.array([0.0, 0.0, 0.0, 1.0]),
         ekf.orientation,
@@ -674,26 +756,19 @@ def test_quaternion_cv_ekf_rejects_absolute_z_axis_outlier() -> None:
     tilted_orientation = _quat_from_rpy(0.8, 0.0, 0.0)
     ekf.initialize(np.zeros(3), tilted_orientation)
 
-    result = ekf.update(
+    accepted = ekf.update(
         np.array([0.02, 0.0, 0.0]),
         tilted_orientation,
-        max_position_innovation_m=0.25,
-        max_orientation_innovation_rad=0.75,
-        max_base_link_z_axis_angle_rad=0.75,
     )
 
-    assert result.position_accepted
-    assert result.orientation_accepted
-    assert not result.z_axis_accepted
-    assert not result.accepted
-    assert result.z_axis_angle_rad > 0.75
+    assert not accepted
     assert np.allclose(ekf.position, np.zeros(3))
     assert np.allclose(ekf.orientation, tilted_orientation)
 
 
 def test_kf_odom_node_publishes_expected_frames_and_tf() -> None:
     TransformBroadcaster.sent_transforms.clear()
-    node = BrovKfOdom()
+    node = BrovEKFOdom()
     quat = _quat_from_rpy(0.0, 0.0, math.pi / 2.0)
 
     node._pose_cb(_make_pose_stamped(pos=(1.0, 2.0, 3.0), quat=quat))
@@ -724,7 +799,7 @@ def test_kf_odom_node_publishes_expected_frames_and_tf() -> None:
 
 
 def test_kf_odom_node_does_not_initialize_from_absolute_z_axis_outlier() -> None:
-    node = BrovKfOdom()
+    node = BrovEKFOdom()
     bad_quat = _quat_from_rpy(0.8, 0.0, 0.0)
 
     node._pose_cb(_make_pose_stamped(pos=(1.0, 2.0, 3.0), quat=bad_quat))
@@ -733,9 +808,9 @@ def test_kf_odom_node_does_not_initialize_from_absolute_z_axis_outlier() -> None
     assert node._consecutive_full_rejections == 1
 
 
-def test_kf_odom_node_does_not_reinitialize_from_absolute_z_axis_outliers() -> None:
-    node = BrovKfOdom()
-    node._max_orientation_innovation_rad = 1.0
+def test_kf_odom_node_resets_after_repeated_z_axis_unsafe_rejections() -> None:
+    """Repeated z-axis-unsafe rejections must fully reset, not reinit with bad data."""
+    node = BrovEKFOdom()
     node._max_rejected_samples = 2
     good_quat = _quat_from_rpy(0.0, 0.0, 0.0)
     bad_quat = _quat_from_rpy(0.8, 0.0, 0.0)
@@ -745,14 +820,86 @@ def test_kf_odom_node_does_not_reinitialize_from_absolute_z_axis_outliers() -> N
     node._pose_cb(_make_pose_stamped(pos=initial_position + np.array([0.01, 0.0, 0.0]), quat=bad_quat))
     node._pose_cb(_make_pose_stamped(pos=initial_position + np.array([0.02, 0.0, 0.0]), quat=bad_quat))
 
+    assert not node._filter.initialized
+    assert node._consecutive_full_rejections == 0
+
+
+def test_kf_odom_node_reinitializes_after_repeated_z_axis_safe_rejections() -> None:
+    """Repeated rejections from innovation gate (but z-axis OK) should reinitialize."""
+    node = BrovEKFOdom()
+    node._max_rejected_samples = 2
+    good_quat = _quat_from_rpy(0.0, 0.0, 0.0)
+    initial_position = np.array([1.0, 2.0, 3.0])
+    far_position = np.array([5.0, 5.0, 5.0])
+
+    node._pose_cb(_make_pose_stamped(pos=initial_position, quat=good_quat))
     assert node._filter.initialized
-    assert np.allclose(node._filter.orientation, good_quat)
-    assert not np.allclose(node._filter.orientation, bad_quat)
-    assert node._consecutive_full_rejections == 2
+
+    node._pose_cb(_make_pose_stamped(pos=far_position, quat=good_quat))
+    node._pose_cb(_make_pose_stamped(pos=far_position, quat=good_quat))
+
+    assert node._filter.initialized
+    assert np.allclose(node._filter.position, far_position)
+    assert node._consecutive_full_rejections == 0
+
+
+def test_quaternion_cv_ekf_predict_rollback_on_z_axis_violation() -> None:
+    """Predict step must not drift orientation past the z-axis safety threshold."""
+    ekf = QuaternionCvEkf(max_base_link_z_axis_angle_rad=0.4)
+    ekf.initialize(np.zeros(3), np.array([0.0, 0.0, 0.0, 1.0]))
+
+    ekf.angular_velocity = np.array([10.0, 0.0, 0.0])
+    orientation_before = ekf.orientation.copy()
+    position_before = ekf.position.copy()
+
+    ekf.predict(0.1)
+
+    assert np.allclose(ekf.orientation, orientation_before)
+    assert np.allclose(ekf.position, position_before)
+
+
+def test_quaternion_cv_ekf_gyro_update_rollback_on_z_axis_violation() -> None:
+    """Gyro update must not push orientation past the z-axis safety threshold."""
+    ekf = QuaternionCvEkf(
+        max_base_link_z_axis_angle_rad=0.4,
+        gyro_std=0.01,
+        angular_accel_std=50.0,
+        max_gyro_innovation_rad_s=100.0,
+    )
+    ekf.initialize(np.zeros(3), np.array([0.0, 0.0, 0.0, 1.0]))
+    ekf.predict(1.0)
+
+    orientation_before = ekf.orientation.copy()
+    accepted = ekf.update_body_angular_velocity(np.array([20.0, 0.0, 0.0]))
+
+    z_angle = base_link_z_axis_angle_rad(ekf.orientation)
+    assert z_angle <= 0.4 + 1e-9
+    if not accepted:
+        assert np.allclose(ekf.orientation, orientation_before)
+
+
+def test_quaternion_cv_ekf_pose_update_rollback_on_z_axis_violation() -> None:
+    """Pose update correction must not push orientation past the z-axis threshold."""
+    ekf = QuaternionCvEkf(
+        max_base_link_z_axis_angle_rad=0.4,
+        max_orientation_innovation_rad=100.0,
+    )
+    slightly_tilted = _quat_from_rpy(0.35, 0.0, 0.0)
+    ekf.initialize(np.zeros(3), slightly_tilted)
+    ekf.covariance[6:9, 6:9] = np.eye(3) * 100.0
+
+    push_over = _quat_from_rpy(0.39, 0.0, 0.0)
+    orientation_before = ekf.orientation.copy()
+    accepted = ekf.update(np.zeros(3), push_over)
+
+    z_angle = base_link_z_axis_angle_rad(ekf.orientation)
+    assert z_angle <= 0.4 + 1e-9
+    if not accepted:
+        assert np.allclose(ekf.orientation, orientation_before)
 
 
 def test_kf_odom_node_reinitializes_after_coast_timeout() -> None:
-    node = BrovKfOdom()
+    node = BrovEKFOdom()
     node._pose_cb(_make_pose_stamped(pos=(1.0, 2.0, 3.0)))
 
     assert node._filter.initialized
@@ -764,8 +911,103 @@ def test_kf_odom_node_reinitializes_after_coast_timeout() -> None:
     assert node._last_pose_rx_sec is None
 
 
+def test_kf_odom_node_imu_does_not_initialize_filter() -> None:
+    node = BrovEKFOdom()
+
+    node._imu_cb(_make_imu(angular=(0.0, 0.0, 0.5)))
+
+    assert not node._filter.initialized
+    assert node._last_pose_rx_sec is None
+
+
+def test_kf_odom_node_fuses_imu_gyro_after_mocap_initialization() -> None:
+    node = BrovEKFOdom()
+    node._pose_cb(_make_pose_stamped())
+    last_pose_rx_sec = node._last_pose_rx_sec
+
+    node._imu_cb(_make_imu(angular=(0.0, 0.0, 0.5)))
+
+    assert node._filter.initialized
+    assert node._last_pose_rx_sec == last_pose_rx_sec
+    assert np.allclose(
+        node._filter.body_angular_velocity(),
+        [0.0, 0.0, 0.5],
+        atol=0.02,
+    )
+
+
+def test_safety_filter_leaves_far_reference_velocity_unchanged() -> None:
+    filtered = filter_single_integrator_velocity(
+        np.array([0.0, 0.0, -2.0]),
+        np.array([0.0, 0.1, 0.0]),
+        np.array([[0.0, 3.0, -2.0]]),
+        safety_radius=0.6,
+    )
+
+    assert filtered is not None
+    assert np.allclose(filtered, [0.0, 0.1, 0.0], atol=1e-6)
+
+
+def test_safety_filter_limits_velocity_toward_obstacle_boundary() -> None:
+    filtered = filter_single_integrator_velocity(
+        np.array([0.0, 2.35, -2.0]),
+        np.array([0.0, 1.0, 0.0]),
+        np.array([[0.0, 3.0, -2.0]]),
+        safety_radius=0.6,
+    )
+
+    assert filtered is not None
+    assert filtered[1] < 0.3
+
+
+def test_safety_filter_keeps_velocity_away_from_obstacle() -> None:
+    filtered = filter_single_integrator_velocity(
+        np.array([0.0, 2.35, -2.0]),
+        np.array([0.0, -0.4, 0.0]),
+        np.array([[0.0, 3.0, -2.0]]),
+        safety_radius=0.6,
+    )
+
+    assert filtered is not None
+    assert np.allclose(filtered, [0.0, -0.4, 0.0], atol=1e-6)
+
+
+def test_safety_node_publishes_filtered_twist_and_obstacle_marker() -> None:
+    node = BrovCtrlSafe()
+    node._map_frame = "map"
+    node._base_link_flu_frame = "map"
+    node._obstacle_position = np.array([0.0, 3.0, -2.0])
+    node._obstacle_radius = 0.5
+    node._robot_radius = 0.1
+    node._safety_radius = 0.6
+
+    cmd = _make_twist_stamped(linear=(0.0, 1.0, 0.0), angular=(0.0, 0.0, 0.7))
+    cmd.header.frame_id = "map"
+    odom = _make_odom(pos=(0.0, 2.35, -2.0))
+    odom.header.frame_id = "map"
+    node._cmd_cb(cmd)
+    node._odom_cb(odom)
+
+    node._tick()
+
+    assert node._cmd_pub.messages
+    msg = node._cmd_pub.messages[-1]
+    assert msg.header.frame_id == "map"
+    assert msg.twist.linear.y < 0.3
+    assert msg.twist.angular.z == 0.7
+
+    assert node._obstacle_marker_pub.messages
+    marker = node._obstacle_marker_pub.messages[-1]
+    assert marker.header.frame_id == "map"
+    assert marker.pose.position.x == 0.0
+    assert marker.pose.position.y == 3.0
+    assert marker.pose.position.z == -2.0
+    assert marker.scale.x == 1.0
+
+
 def test_setup_entry_points_reference_current_modules() -> None:
     setup_text = Path(__file__).resolve().parents[1].joinpath("setup.py").read_text()
     assert "brov_ctrl_waypoint = mr_pinchy_interface.brov_ctrl_waypoint:main" in setup_text
+    assert "brov_ctrl_safe = mr_pinchy_interface.brov_ctrl_safe:main" in setup_text
     assert "brov_ctrl_twist = mr_pinchy_interface.brov_ctrl_twist:main" in setup_text
     assert "brov_kf_odom = mr_pinchy_interface.brov_kf_odom:main" in setup_text
