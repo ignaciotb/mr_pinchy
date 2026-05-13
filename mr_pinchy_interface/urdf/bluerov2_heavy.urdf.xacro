@@ -1,30 +1,6 @@
 <?xml version="1.0"?>
 <robot name="bluerov2_heavy" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <xacro:macro name="t200_thruster" params="index x y z roll pitch yaw mesh visual_rpy">
-    <link name="thruster${index}">
-      <visual>
-        <origin xyz="0 0 0" rpy="${visual_rpy}"/>
-        <geometry>
-          <mesh filename="${mesh}"/>
-        </geometry>
-        <material name="t200_prop_blue">
-          <color rgba="0.117647 0.419608 0.568627 1.0"/>
-        </material>
-      </visual>
-      <inertial>
-        <origin xyz="0 0 0" rpy="0 0 0"/>
-        <mass value="0.002"/>
-        <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/>
-      </inertial>
-    </link>
-    <joint name="thruster${index}_joint" type="fixed">
-      <parent link="mr_pinchy/base_link_ekf_flu"/>
-      <child link="thruster${index}"/>
-      <origin xyz="${x} ${y} ${z}" rpy="${roll} ${pitch} ${yaw}"/>
-    </joint>
-  </xacro:macro>
-
   <link name="mr_pinchy/base_link_ekf_flu">
     <visual name="base_link_visual_00">
       <origin xyz="0 0 0" rpy="1.570796 0 0"/>
@@ -435,7 +411,7 @@
     </inertial>
   </link>
 
-  <xacro:t200_thruster index="1" x="0.14" y="-0.092" z="0.0"
+  <!-- <xacro:t200_thruster index="1" x="0.14" y="-0.092" z="0.0"
                       roll="-1.571" pitch="1.571" yaw="-0.785"
                       mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_ccw_prop_30_107_145_004.obj" visual_rpy="0 0 0"/>
   <xacro:t200_thruster index="2" x="0.14" y="0.092" z="0.0"
@@ -458,6 +434,6 @@
                       mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_cw_prop_30_107_145_003.obj" visual_rpy="3.142 0 1.571"/>
   <xacro:t200_thruster index="8" x="-0.118" y="0.215" z="0.064"
                       roll="0" pitch="0" yaw="0"
-                      mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_ccw_prop_30_107_145_004.obj" visual_rpy="0 0 1.571"/>
+                      mesh="package://mr_pinchy_interface/urdf/bluerov2_heavy/meshes/t200_ccw_prop_30_107_145_004.obj" visual_rpy="0 0 1.571"/> -->
 
 </robot>

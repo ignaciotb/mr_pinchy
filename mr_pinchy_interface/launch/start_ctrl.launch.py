@@ -6,6 +6,8 @@ from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 import os
 import xacro
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import IncludeLaunchDescription
 
 def generate_launch_description() -> LaunchDescription:
     default_rviz = PathJoinSubstitution(
@@ -62,15 +64,23 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         arguments=["-d", LaunchConfiguration("rviz_config")],
     )
+    
+    sonar_pkg = get_package_share_directory('waterlinked_sonar_3d15')
+    sonar_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(sonar_pkg, 'launch', 'sonar_3d15.launch.py')
+        )
+    )
 
     return LaunchDescription(
         [
             rviz_config_arg,
             ekf_odom,
             # waypoint_controller,
-            twist_controller,
-            safe_controller,
+            # twist_controller,
+            # safe_controller,
             robot_state_pub,
             rviz_node,
+            sonar_launch,
         ]
     )

@@ -139,7 +139,7 @@ class BrovCtrlSafe(Node):
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_ekf")
         self.declare_parameter("map_frame", "map")
         self.declare_parameter("base_link_flu_frame", "mr_pinchy/base_link_ekf_flu")
-        self.declare_parameter("obstacle_position", [0.0, 4.5, -1.0])
+        self.declare_parameter("obstacle_position", [0.0, 4.0, -1.0])
         self.declare_parameter("obstacle_radius", OBS_RADIUS)
         self.declare_parameter("robot_radius", ROBOT_RADIUS)
         self.declare_parameter("publish_rate_hz", 30.0)
@@ -193,6 +193,9 @@ class BrovCtrlSafe(Node):
 
     def _cmd_cb(self, msg: TwistStamped) -> None:
         self._last_cmd = msg
+        self.get_logger().info(
+            f"Cmd velocity linear x: {msg.twist.linear.x}, linear y: {msg.twist.linear.y}, linear z: {msg.twist.linear.z}",
+        )
 
     def _odom_cb(self, msg: Odometry) -> None:
         self._last_odom = msg

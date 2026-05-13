@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import math
-import time
 
 import numpy as np
 import rclpy
@@ -402,7 +401,7 @@ class BrovEKFOdom(Node):
         self.declare_parameter("publish_tf", True)
         self.declare_parameter("use_imu_gyro", False)
         self.declare_parameter("max_coast_sec", 1.0)
-        self.declare_parameter("max_rejected_samples", 10)
+        self.declare_parameter("max_rejected_samples", 200)
 
         self._pose_topic = str(self.get_parameter("pose_topic").value)
         self._odom_topic = str(self.get_parameter("odom_topic").value)
@@ -428,9 +427,12 @@ class BrovEKFOdom(Node):
             self.create_subscription(Imu, self._imu_topic, self._imu_cb, qos)
         self._tf_broadcaster = TransformBroadcaster(self) if self._publish_tf else None
         self._static_tf_broadcaster = StaticTransformBroadcaster(self)
-        self._publish_static_body_frames()
+        # self._publish_static_body_frames()
 
         self.create_timer(1.0 / self._publish_rate_hz, self._tick)
+        self._static_tf_timer = self.create_timer(1, self._publish_static_body_frames_once)
+
+        # self.create_timer(1.0, self._print_vel)
         self.get_logger().info(
             f"brov_odom_ekf: pose='{self._pose_topic}', odom='{self._odom_topic}', "
             f"imu='{self._imu_topic}', use_imu_gyro={self._use_imu_gyro}, "
@@ -445,9 +447,21 @@ class BrovEKFOdom(Node):
             "imu_frame_assumption='base_link aligned with EKF body axes'"
         )
     
-    def _publish_static_body_frames(self) -> None:
+    def _now_sec(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def _print_vel(self):
+        linear_body = self._filter.body_linear_velocity()
+        angular_body = self._filter.body_angular_velocity()
+        self.get_logger().info(
+            f"Linear velocity: {linear_body}, Angular velocity: {angular_body}",
+        )
+    
+    def _publish_static_body_frames_once(self) -> None:
+        stamp = self.get_clock().now().to_msg()
+
         transform = TransformStamped()
-        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.stamp = stamp
         transform.header.frame_id = self._child_frame
         transform.child_frame_id = self._child_frame_flu
         transform.transform.translation.x = 0.0
@@ -458,10 +472,22 @@ class BrovEKFOdom(Node):
         transform.transform.rotation.y = 0.0
         transform.transform.rotation.z = 0.0
         transform.transform.rotation.w = 0.0
-        self._static_tf_broadcaster.sendTransform(transform)
+        sonar_transform = TransformStamped()
+        sonar_transform.header.stamp = stamp
+        sonar_transform.header.frame_id = self._child_frame
+        sonar_transform.child_frame_id = "mr_pinchy/sonar_link"
+        sonar_transform.transform.translation.x = 0.220
+        sonar_transform.transform.translation.y = 0.0
+        sonar_transform.transform.translation.z = -0.160
+        sonar_transform.transform.rotation.x = 0.0
+        sonar_transform.transform.rotation.y = -0.259
+        sonar_transform.transform.rotation.z = 0.0
+        sonar_transform.transform.rotation.w = 0.966
+        self._static_tf_broadcaster.sendTransform([transform, sonar_transform])
+
 
     def _pose_cb(self, msg):
-        now = time.monotonic()
+        now = self._now_sec()
         position = np.array(
             [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z],
             dtype=float,
@@ -508,7 +534,7 @@ class BrovEKFOdom(Node):
                 throttle_duration_sec=2.0,
             )
 
-        now = time.monotonic()
+        now = self._now_sec()
         dt = now - self._last_filter_sec if self._last_filter_sec is not None else 0.0
         self._filter.predict(dt)
 
@@ -546,29 +572,29 @@ class BrovEKFOdom(Node):
             f"consecutive_rejections={self._consecutive_full_rejections}",
             throttle_duration_sec=1.0,
         )
-        # if (
-        #     self._max_rejected_samples > 0
-        #     and self._consecutive_full_rejections >= self._max_rejected_samples
-        # ):
-        #     z_angle = base_link_z_axis_angle_rad(quat_normalize(orientation))
-        #     z_safe = self._filter._within_gate(
-        #         z_angle, self._filter.max_base_link_z_axis_angle_rad
-        #     )
-        #     if z_safe:
-        #         self._filter.initialize(position, orientation)
-        #         self._consecutive_full_rejections = 0
-        #         self.get_logger().warn(
-        #             "Reinitialized EKF after repeated mocap pose rejections.",
-        #             throttle_duration_sec=1.0,
-        #         )
-        #     else:
-        #         self._reset_filter()
-        #         self.get_logger().warn(
-        #             "Reset EKF after repeated rejections (z-axis unsafe, "
-        #             f"angle={z_angle:.3f}rad > "
-        #             f"limit={self._filter.max_base_link_z_axis_angle_rad:.3f}rad).",
-        #             throttle_duration_sec=1.0,
-        #         )
+        if (
+            self._max_rejected_samples > 0
+            and self._consecutive_full_rejections >= self._max_rejected_samples
+        ):
+            z_angle = base_link_z_axis_angle_rad(quat_normalize(orientation))
+            z_safe = self._filter._within_gate(
+                z_angle, self._filter.max_base_link_z_axis_angle_rad
+            )
+            if z_safe:
+                self._filter.initialize(position, orientation)
+                self._consecutive_full_rejections = 0
+                self.get_logger().warn(
+                    "Reinitialized EKF after repeated mocap pose rejections.",
+                    throttle_duration_sec=1.0,
+                )
+            else:
+                self._reset_filter()
+                self.get_logger().warn(
+                    "Reset EKF after repeated rejections (z-axis unsafe, "
+                    f"angle={z_angle:.3f}rad > "
+                    f"limit={self._filter.max_base_link_z_axis_angle_rad:.3f}rad).",
+                    throttle_duration_sec=1.0,
+                )
 
     def _reset_filter(self):
         self._filter = self._filter.reset_copy()
@@ -579,7 +605,7 @@ class BrovEKFOdom(Node):
     def _tick(self):
         if not self._filter.initialized or self._last_pose_rx_sec is None:
             return
-        now = time.monotonic()
+        now = self._now_sec()
         if (now - self._last_pose_rx_sec) > self._max_coast_sec:
             self._reset_filter()
             self.get_logger().warn(

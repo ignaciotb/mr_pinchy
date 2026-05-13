@@ -768,8 +768,32 @@ def test_quaternion_cv_ekf_rejects_absolute_z_axis_outlier() -> None:
 
 def test_ekf_odom_node_publishes_expected_frames_and_tf() -> None:
     TransformBroadcaster.sent_transforms.clear()
+    StaticTransformBroadcaster.sent_transforms.clear()
     node = BrovEKFOdom()
     quat = _quat_from_rpy(0.0, 0.0, math.pi / 2.0)
+
+    assert len(StaticTransformBroadcaster.sent_transforms) == 2
+    flu_tf, sonar_tf = StaticTransformBroadcaster.sent_transforms
+
+    assert flu_tf.header.frame_id == "mr_pinchy/base_link_ekf"
+    assert flu_tf.child_frame_id == "mr_pinchy/base_link_ekf_flu"
+    assert flu_tf.transform.translation.x == 0.0
+    assert flu_tf.transform.translation.y == 0.0
+    assert flu_tf.transform.translation.z == 0.0
+    assert flu_tf.transform.rotation.x == 1.0
+    assert flu_tf.transform.rotation.y == 0.0
+    assert flu_tf.transform.rotation.z == 0.0
+    assert flu_tf.transform.rotation.w == 0.0
+
+    assert sonar_tf.header.frame_id == "mr_pinchy/base_link_ekf"
+    assert sonar_tf.child_frame_id == "mr_pinchy/sonar_link"
+    assert sonar_tf.transform.translation.x == 0.220
+    assert sonar_tf.transform.translation.y == 0.0
+    assert sonar_tf.transform.translation.z == -0.160
+    assert sonar_tf.transform.rotation.x == 0.0
+    assert sonar_tf.transform.rotation.y == -0.259
+    assert sonar_tf.transform.rotation.z == 0.0
+    assert sonar_tf.transform.rotation.w == 0.966
 
     node._pose_cb(_make_pose_stamped(pos=(1.0, 2.0, 3.0), quat=quat))
     node._tick()
