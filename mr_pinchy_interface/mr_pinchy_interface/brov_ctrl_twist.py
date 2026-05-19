@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import copy
-import time
 
 import numpy as np
 import rclpy
 from geometry_msgs.msg import (
-    TransformStamped,
     TwistStamped,
     WrenchStamped,
 )
@@ -17,17 +15,15 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from tf2_geometry_msgs import do_transform_pose_stamped, do_transform_vector3
-from tf2_ros import Buffer, StaticTransformBroadcaster, TransformException, TransformListener
+from tf2_ros import Buffer, TransformException, TransformListener
 
 from mr_pinchy_interface.brov_dynamics import bluerov2_model_terms
 from mr_pinchy_interface.brov_utils import (
     body_wrench_message,
-    odom_to_body_state,
     pose_rpy_in_ned,
     pose_stamped_from_pose,
     pose_stamped_from_transform,
     transform_from_pose,
-    twist_to_body_velocity,
     vector3_stamped,
     vector3_to_array,
     wrench_to_rc_override,
@@ -54,7 +50,6 @@ def velocity_feedback_wrench(
         kd_gains = np.zeros_like(kp_gains, dtype=float)
     if error_derivative is None:
         error_derivative = np.zeros_like(error, dtype=float)
-    # print(f"error: {error}", flush=True)
     return np.asarray(kp_gains * error + kd_gains * error_derivative, dtype=float)
 
 
@@ -93,6 +88,7 @@ class BrovTwistController(Node):
         self._debug_log = False
         self._publish_rate_hz = 30.0
         self._odom_timeout_sec = 0.3
+        self._cmd_timeout_sec = 0.3
         self._k_u = 50.0
         self._k_v = 50.0
         self._k_w = 50.0
@@ -169,7 +165,8 @@ class BrovTwistController(Node):
         self._nu_ref: np.ndarray | None = None
         self._prev_velocity_error: np.ndarray | None = None
         self._prev_feedback_sec: float | None = None
-
+        self._last_cmd_rx_sec: float = 0.0
+        
         self.create_timer(1.0 / self._publish_rate_hz, self._tick)
         self.get_logger().info(
             f"brov_ctrl_twist: cmd='{cmd_topic}', odom='{odom_topic}', "
@@ -179,11 +176,11 @@ class BrovTwistController(Node):
 
     def _cmd_cb(self, msg: TwistStamped) -> None:
         self._last_cmd = msg
-        # print(f"Cmd velocity linear x: {msg.twist.linear.x}, linear y: {msg.twist.linear.y}, linear z: {msg.twist.linear.z}, angular x: {msg.twist.angular.x}, angular y: {msg.twist.angular.y}, angular z: {msg.twist.angular.z}", flush=True)
+        self._last_cmd_rx_sec = self.get_clock().now().nanoseconds * 1e-9
 
     def _odom_cb(self, msg: Odometry) -> None:
         self._last_odom = msg
-        self._last_odom_rx_sec = time.monotonic()
+        self._last_odom_rx_sec = self.get_clock().now().nanoseconds * 1e-9
 
     def _lookup_transform(self, target_frame: str, source_frame: str):
         return self._tf_buffer.lookup_transform(
@@ -326,7 +323,7 @@ class BrovTwistController(Node):
         tau_ff = static_wrench_feedforward(eta, nu)
         error = self._nu_ref - nu
         if feedback_time_sec is None:
-            feedback_time_sec = time.monotonic()
+            feedback_time_sec = self.get_clock().now().nanoseconds * 1e-9
         error_derivative = self._feedback_error_derivative(error, feedback_time_sec)
         tau_fb = velocity_feedback_wrench(
             nu,
@@ -368,12 +365,17 @@ class BrovTwistController(Node):
         self._publish_wrench_and_rc(np.zeros(6, dtype=float))
 
     def _tick(self) -> None:
-        now = time.monotonic()
+        now = self.get_clock().now().nanoseconds * 1e-9
 
-        if self._last_cmd is None:
+        if self._last_cmd is None or (now - self._last_cmd_rx_sec) > self._cmd_timeout_sec:
             self._nu_ref = None
             self._reset_feedback_state()
             self._publish_zero_wrench_and_rc()
+            if self._last_cmd is not None:
+                self.get_logger().warn(
+                    f"Command timeout ({self._cmd_timeout_sec:.2f}s); forcing zero control.",
+                    throttle_duration_sec=2.0,
+                )
             return
 
         if self._last_odom is None or (now - self._last_odom_rx_sec) > self._odom_timeout_sec:

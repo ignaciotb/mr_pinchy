@@ -360,7 +360,7 @@ class QuaternionCvEkf:
             self.covariance.copy(),
         )
 
-    def _restore(self, snapshot, orientation_only=True):
+    def _restore(self, snapshot, orientation_only=False):
         if orientation_only:
             self.orientation = snapshot[2]
             self.angular_velocity = snapshot[3]
@@ -502,17 +502,14 @@ class BrovEKFOdom(Node):
             dtype=float,
         )
 
-        if self._filter.initialized:
-            dt = now - self._last_filter_sec if self._last_filter_sec is not None else 0.0
-            self._filter.predict(dt)
-
         accepted = self._filter.update(
             position,
             orientation,
         )
         self._handle_update_result(accepted, position, orientation)
 
-        self._last_filter_sec = now
+        if self._last_filter_sec is None:
+            self._last_filter_sec = now
         self._last_pose_rx_sec = now
 
         frame_id = msg.header.frame_id
@@ -534,10 +531,6 @@ class BrovEKFOdom(Node):
                 throttle_duration_sec=2.0,
             )
 
-        now = self._now_sec()
-        dt = now - self._last_filter_sec if self._last_filter_sec is not None else 0.0
-        self._filter.predict(dt)
-
         angular_velocity_body = np.array(
             [
                 msg.angular_velocity.x,
@@ -553,8 +546,6 @@ class BrovEKFOdom(Node):
                 f"max_gyro_innovation={self._filter.max_gyro_innovation_rad_s:.3f}rad/s",
                 throttle_duration_sec=1.0,
             )
-
-        self._last_filter_sec = now
 
     def _handle_update_result(
         self,
