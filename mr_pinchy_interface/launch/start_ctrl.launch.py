@@ -20,10 +20,17 @@ def generate_launch_description() -> LaunchDescription:
         description="Absolute path to RViz config file",
     )
 
-    waypoint_controller = Node(
+    waypoint_wrench_controller = Node(
         package="mr_pinchy_interface",
-        executable="brov_ctrl_waypoint",
-        name="brov_ctrl_waypoint",
+        executable="brov_ctrl_waypoint_wrench",
+        name="brov_ctrl_waypoint_wrench",
+        output="screen",
+    )
+    
+    waypoint_twist_controller = Node(
+        package="mr_pinchy_interface",
+        executable="brov_ctrl_waypoint_twist",
+        name="brov_ctrl_waypoint_twist",
         output="screen",
     )
 
@@ -76,8 +83,9 @@ def generate_launch_description() -> LaunchDescription:
         [
             rviz_config_arg,
             ekf_odom,
-            # waypoint_controller,
-            # twist_controller,
+            # waypoint_wrench_controller,
+            waypoint_twist_controller,
+            twist_controller,
             # safe_controller,
             robot_state_pub,
             rviz_node,

@@ -31,7 +31,7 @@ jax.config.update("jax_platform_name", device)
 
 ROBOT_RADIUS = 0.4
 OBS_RADIUS = 0.5
-GAMMA_COLAV = 5.0
+GAMMA_COLAV = 1.0
 kappa = 100.0
 
 
@@ -139,7 +139,7 @@ class BrovCtrlSafe(Node):
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_ekf")
         self.declare_parameter("map_frame", "map")
         self.declare_parameter("base_link_flu_frame", "mr_pinchy/base_link_ekf_flu")
-        self.declare_parameter("obstacle_position", [0.0, 4.0, -1.0])
+        self.declare_parameter("obstacle_position", [0.0, 4.0, -1.5])
         self.declare_parameter("obstacle_radius", OBS_RADIUS)
         self.declare_parameter("robot_radius", ROBOT_RADIUS)
         self.declare_parameter("publish_rate_hz", 30.0)
