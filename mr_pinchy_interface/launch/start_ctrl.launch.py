@@ -20,18 +20,27 @@ def generate_launch_description() -> LaunchDescription:
         description="Absolute path to RViz config file",
     )
 
+    use_sim_time_arg = DeclareLaunchArgument(
+        "use_sim_time",
+        default_value="false",
+        description="Use simulation clock",
+    )
+    use_sim_time = {"use_sim_time": LaunchConfiguration("use_sim_time")}
+
     waypoint_wrench_controller = Node(
         package="mr_pinchy_interface",
         executable="brov_ctrl_waypoint_wrench",
         name="brov_ctrl_waypoint_wrench",
         output="screen",
+        parameters=[use_sim_time],
     )
-    
+
     waypoint_twist_controller = Node(
         package="mr_pinchy_interface",
         executable="brov_ctrl_waypoint_twist",
         name="brov_ctrl_waypoint_twist",
         output="screen",
+        parameters=[use_sim_time],
     )
 
     twist_controller = Node(
@@ -39,13 +48,15 @@ def generate_launch_description() -> LaunchDescription:
         executable="brov_ctrl_twist",
         name="brov_ctrl_twist",
         output="screen",
+        parameters=[use_sim_time],
     )
-    
+
     safe_controller = Node(
         package="mr_pinchy_interface",
         executable="brov_ctrl_safe",
         name="brov_ctrl_safe",
         output="screen",
+        parameters=[use_sim_time],
     )
 
     ekf_odom = Node(
@@ -53,6 +64,7 @@ def generate_launch_description() -> LaunchDescription:
         executable="brov_odom_ekf",
         name="brov_odom_ekf",
         output="screen",
+        parameters=[use_sim_time],
     )
     
     urdf = os.path.join(get_package_share_directory("mr_pinchy_interface"), "urdf", "bluerov2_heavy.urdf.xacro")
@@ -61,7 +73,7 @@ def generate_launch_description() -> LaunchDescription:
         package="robot_state_publisher",
         executable="robot_state_publisher",
         name="robot_state_publisher",
-        parameters=[{"robot_description": robot_description}],
+        parameters=[{"robot_description": robot_description}, use_sim_time],
     )
 
     rviz_node = Node(
@@ -82,13 +94,14 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             rviz_config_arg,
-            ekf_odom,
+            use_sim_time_arg,
+            # ekf_odom,
             # waypoint_wrench_controller,
-            waypoint_twist_controller,
-            twist_controller,
+            # waypoint_twist_controller,
+            # twist_controller,
             # safe_controller,
             robot_state_pub,
+            # sonar_launch,
             rviz_node,
-            sonar_launch,
         ]
     )

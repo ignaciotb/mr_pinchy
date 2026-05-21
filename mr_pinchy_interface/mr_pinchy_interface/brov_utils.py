@@ -74,6 +74,17 @@ def quat_to_rpy(x: float, y: float, z: float, w: float) -> tuple[float, float, f
     return roll, pitch, yaw
 
 
+def rpy_to_quat(roll: float, pitch: float, yaw: float) -> tuple[float, float, float, float]:
+    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
+    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
+    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
+    x = sr * cp * cy - cr * sp * sy
+    y = cr * sp * cy + sr * cp * sy
+    z = cr * cp * sy - sr * sp * cy
+    w = cr * cp * cy + sr * sp * sy
+    return x, y, z, w
+
+
 def quat_to_rotation_matrix(x: float, y: float, z: float, w: float) -> np.ndarray:
     xx, yy, zz = x * x, y * y, z * z
     xy, xz, yz = x * y, x * z, y * z

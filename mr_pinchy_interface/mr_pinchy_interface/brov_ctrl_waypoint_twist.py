@@ -1,3 +1,5 @@
+import math
+
 import rclpy
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry
@@ -10,6 +12,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from mr_pinchy_interface.brov_utils import (
     PIDAxis,
     quat_to_rpy,
+    rpy_to_quat,
 )
 
 
@@ -31,18 +34,18 @@ class BrovWayPointTwistController(Node):
         self._publish_rate_hz = 30.0
         self._odom_timeout = 0.3
 
-        linear_vel_limit = 0.2
+        linear_vel_limit = 0.15
         self._pid_x = PIDAxis(
-            kp=3.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=linear_vel_limit
+            kp=1.0, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
         )
         self._pid_y = PIDAxis(
-            kp=3.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=linear_vel_limit
+            kp=1.0, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
         )
         self._pid_z = PIDAxis(
-            kp=3.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=linear_vel_limit
+            kp=1.0, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
         )
         
-        angular_vel_limit = 0.2
+        angular_vel_limit = 0.15
         self._pid_roll = PIDAxis(
             kp=1.0,
             ki=0.0,
@@ -80,7 +83,7 @@ class BrovWayPointTwistController(Node):
         
     def _goal_cb(self, msg: PoseStamped):
         self._goal_pose = msg
-        self._goal_pose.pose.position.z = -1.5
+        self._goal_pose.pose.position.z = -1.0
         self._reset_pid()
         self.get_logger().info(
             f"Received new goal pose: frame_id='{msg.header.frame_id}', "
@@ -179,8 +182,8 @@ class BrovWayPointTwistController(Node):
         surge_pid = self._pid_x.step(ex, dt)
         sway_pid = self._pid_y.step(ey, dt)
         heave_pid = self._pid_z.step(ez, dt)
-        roll_pid = self._pid_roll.step(eroll, dt, wrap_error=True)
-        pitch_pid = self._pid_pitch.step(epitch, dt, wrap_error=True)
+        roll_pid = self._pid_roll.step(-eroll, dt, wrap_error=True)
+        pitch_pid = self._pid_pitch.step(-epitch, dt, wrap_error=True)
         yaw_pid = self._pid_yaw.step(eyaw, dt, wrap_error=True)
 
         stamp = self.get_clock().now().to_msg()

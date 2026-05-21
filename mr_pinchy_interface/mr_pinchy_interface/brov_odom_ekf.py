@@ -66,6 +66,18 @@ def quat_log(q):
     return vector * (angle / vector_norm)
 
 
+def skew(v):
+    v = np.asarray(v, dtype=float)
+    return np.array(
+        [
+            [0.0, -v[2], v[1]],
+            [v[2], 0.0, -v[0]],
+            [-v[1], v[0], 0.0],
+        ],
+        dtype=float,
+    )
+
+
 def quat_to_rotation_matrix(q):
     x, y, z, w = quat_normalize(q)
     xx, yy, zz = x * x, y * y, z * z
@@ -326,6 +338,7 @@ class QuaternionCvEkf:
         snap = self._snapshot()
 
         h = np.zeros((3, 12), dtype=float)
+        h[:, 6:9] = skew(self.angular_velocity)
         h[:, 9:12] = np.eye(3)
         r = np.eye(3, dtype=float) * self.gyro_std**2
 
@@ -399,7 +412,7 @@ class BrovEKFOdom(Node):
         self.declare_parameter("child_frame_flu", "mr_pinchy/base_link_ekf_flu")
         self.declare_parameter("publish_rate_hz", 20.0)
         self.declare_parameter("publish_tf", True)
-        self.declare_parameter("use_imu_gyro", False)
+        self.declare_parameter("use_imu_gyro", True)
         self.declare_parameter("max_coast_sec", 1.0)
         self.declare_parameter("max_rejected_samples", 200)
 
@@ -444,7 +457,7 @@ class BrovEKFOdom(Node):
             f"max_base_link_z_axis_angle={self._filter.max_base_link_z_axis_angle_rad:.3f}rad, "
             f"gyro_std={self._filter.gyro_std:.3f}rad/s, "
             f"max_gyro_innovation={self._filter.max_gyro_innovation_rad_s:.3f}rad/s, "
-            "imu_frame_assumption='base_link aligned with EKF body axes'"
+            "imu_frame_assumption='base_link (FLU), converted to FRD'"
         )
     
     def _now_sec(self) -> float:
@@ -527,15 +540,16 @@ class BrovEKFOdom(Node):
         if frame_id and frame_id != "base_link":
             self.get_logger().warn(
                 "Received IMU gyro in frame "
-                f"'{frame_id}', expected 'base_link' aligned with EKF body axes.",
+                f"'{frame_id}', expected 'base_link' (FLU).",
                 throttle_duration_sec=2.0,
             )
 
+        # mavros base_link is FLU; EKF body frame is FRD (Y/Z flipped)
         angular_velocity_body = np.array(
             [
                 msg.angular_velocity.x,
-                msg.angular_velocity.y,
-                msg.angular_velocity.z,
+                -msg.angular_velocity.y,
+                -msg.angular_velocity.z,
             ],
             dtype=float,
         )

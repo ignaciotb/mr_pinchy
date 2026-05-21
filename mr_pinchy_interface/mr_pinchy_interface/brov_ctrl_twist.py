@@ -89,9 +89,10 @@ class BrovTwistController(Node):
         self._publish_rate_hz = 30.0
         self._odom_timeout_sec = 0.3
         self._cmd_timeout_sec = 0.3
-        self._k_u = 50.0
-        self._k_v = 50.0
-        self._k_w = 50.0
+        self._k_u = 30.0
+        self._k_v = 30.0
+        self._k_w_pos = 10.0
+        self._k_w_neg = 20.0
         self._k_p = 2.0
         self._k_q = 2.0
         self._k_r = 4.0
@@ -100,7 +101,7 @@ class BrovTwistController(Node):
         self._kd_w = 0.0
         self._kd_p = 0.0
         self._kd_q = 0.0
-        self._kd_r = 0.0
+        self._kd_r = 0.1
         self._fx_max = 60.0
         self._fy_max = 60.0
         self._fz_max = 60.0
@@ -115,7 +116,7 @@ class BrovTwistController(Node):
             [
                 self._k_u,
                 self._k_v,
-                self._k_w,
+                self._k_w_pos,
                 self._k_p,
                 self._k_q,
                 self._k_r,
@@ -320,15 +321,26 @@ class BrovTwistController(Node):
             self._reset_feedback_state()
             return None
         eta, nu = state
-        tau_ff = static_wrench_feedforward(eta, nu)
+        tank_range = np.array([[2.0, -1.5, 0.5], [6.0, 1.5, 3.0]])
+        eta_array = np.array([eta[0], eta[1], eta[2]])
+        if np.any(eta_array < tank_range[0]) or np.any(eta_array > tank_range[1]):
+            self._reset_feedback_state()
+            self.get_logger().warn(
+                f"Out of tank range; forcing zero control.",
+                throttle_duration_sec=1.0,
+            )
+            return None
+        tau_ff = static_wrench_feedforward(eta, self._nu_ref)
         error = self._nu_ref - nu
         if feedback_time_sec is None:
             feedback_time_sec = self.get_clock().now().nanoseconds * 1e-9
         error_derivative = self._feedback_error_derivative(error, feedback_time_sec)
+        kp_gains = self._kp_gains.copy()
+        kp_gains[2] = self._k_w_neg if error[2] < 0 else self._k_w_pos
         tau_fb = velocity_feedback_wrench(
             nu,
             self._nu_ref,
-            self._kp_gains,
+            kp_gains,
             self._kd_gains,
             error_derivative,
         )
@@ -367,15 +379,15 @@ class BrovTwistController(Node):
     def _tick(self) -> None:
         now = self.get_clock().now().nanoseconds * 1e-9
 
-        if self._last_cmd is None or (now - self._last_cmd_rx_sec) > self._cmd_timeout_sec:
+        if self._last_cmd is None:
             self._nu_ref = None
             self._reset_feedback_state()
             self._publish_zero_wrench_and_rc()
-            if self._last_cmd is not None:
-                self.get_logger().warn(
-                    f"Command timeout ({self._cmd_timeout_sec:.2f}s); forcing zero control.",
-                    throttle_duration_sec=2.0,
-                )
+            # if self._last_cmd is not None:
+            #     self.get_logger().warn(
+            #         f"Command timeout ({self._cmd_timeout_sec:.2f}s); forcing zero control.",
+            #         throttle_duration_sec=2.0,
+            #     )
             return
 
         if self._last_odom is None or (now - self._last_odom_rx_sec) > self._odom_timeout_sec:
@@ -396,7 +408,7 @@ class BrovTwistController(Node):
         
         alpha = 0.1
         if self._nu_ref is None:
-            self._nu_ref = alpha * nu_cmd
+            self._nu_ref = np.zeros_like(nu_cmd)
         else:
             self._nu_ref = alpha * nu_cmd + (1 - alpha) * self._nu_ref
 
