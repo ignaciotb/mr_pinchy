@@ -86,16 +86,15 @@ class BrovTwistController(Node):
         rc_topic = str(self.get_parameter("rc_topic").value)
         self._base_link_frame = normalize_tf_frame_id(self.get_parameter("base_link_frame").value)
         self._debug_log = False
-        self._publish_rate_hz = 30.0
+        self._publish_rate_hz = 50.0
         self._odom_timeout_sec = 0.3
         self._cmd_timeout_sec = 0.3
         self._k_u = 30.0
         self._k_v = 30.0
-        self._k_w_pos = 10.0
-        self._k_w_neg = 20.0
+        self._k_w = 6.0
         self._k_p = 2.0
         self._k_q = 2.0
-        self._k_r = 4.0
+        self._k_r = 3.0
         self._kd_u = 1.0
         self._kd_v = 1.0
         self._kd_w = 0.0
@@ -116,7 +115,7 @@ class BrovTwistController(Node):
             [
                 self._k_u,
                 self._k_v,
-                self._k_w_pos,
+                self._k_w,
                 self._k_p,
                 self._k_q,
                 self._k_r,
@@ -336,7 +335,6 @@ class BrovTwistController(Node):
             feedback_time_sec = self.get_clock().now().nanoseconds * 1e-9
         error_derivative = self._feedback_error_derivative(error, feedback_time_sec)
         kp_gains = self._kp_gains.copy()
-        kp_gains[2] = self._k_w_neg if error[2] < 0 else self._k_w_pos
         tau_fb = velocity_feedback_wrench(
             nu,
             self._nu_ref,

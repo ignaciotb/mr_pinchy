@@ -410,7 +410,7 @@ class BrovEKFOdom(Node):
         self.declare_parameter("parent_frame", "mocap")
         self.declare_parameter("child_frame", "mr_pinchy/base_link_ekf")
         self.declare_parameter("child_frame_flu", "mr_pinchy/base_link_ekf_flu")
-        self.declare_parameter("publish_rate_hz", 20.0)
+        self.declare_parameter("publish_rate_hz", 80.0)
         self.declare_parameter("publish_tf", True)
         self.declare_parameter("use_imu_gyro", True)
         self.declare_parameter("max_coast_sec", 1.0)
@@ -544,12 +544,30 @@ class BrovEKFOdom(Node):
                 throttle_duration_sec=2.0,
             )
 
+        raw_angular_velocity = np.array(
+            [
+                msg.angular_velocity.x,
+                msg.angular_velocity.y,
+                msg.angular_velocity.z,
+            ],
+            dtype=float,
+        )
+        alpha = 0.2
+        previous = getattr(self, "_imu_gyro_lpf", None)
+        if previous is None:
+            filtered_angular_velocity = raw_angular_velocity
+        else:
+            filtered_angular_velocity = (
+                alpha * raw_angular_velocity + (1.0 - alpha) * previous
+            )
+        self._imu_gyro_lpf = filtered_angular_velocity
+
         # mavros base_link is FLU; EKF body frame is FRD (Y/Z flipped)
         angular_velocity_body = np.array(
             [
-                msg.angular_velocity.x,
-                -msg.angular_velocity.y,
-                -msg.angular_velocity.z,
+                filtered_angular_velocity[0],
+                -filtered_angular_velocity[1],
+                -filtered_angular_velocity[2],
             ],
             dtype=float,
         )
