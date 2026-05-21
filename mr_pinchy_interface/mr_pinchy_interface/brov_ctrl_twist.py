@@ -320,7 +320,7 @@ class BrovTwistController(Node):
             self._reset_feedback_state()
             return None
         eta, nu = state
-        tank_range = np.array([[2.0, -1.5, 0.5], [6.0, 1.5, 3.0]])
+        tank_range = np.array([[1, -1.8, 0.5], [6.0, 1.8, 3.0]])
         eta_array = np.array([eta[0], eta[1], eta[2]])
         if np.any(eta_array < tank_range[0]) or np.any(eta_array > tank_range[1]):
             self._reset_feedback_state()
