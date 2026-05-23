@@ -83,7 +83,7 @@ def generate_launch_description() -> LaunchDescription:
         executable="robot_state_publisher",
         name="watertank_state_publisher",
         parameters=[{"robot_description": watertank_description}, use_sim_time],
-        remappings=[("robot_description", "watertank_description")],
+        remappings=[("robot_description", "tank_description")],
     )
 
     rviz_node = Node(
@@ -116,6 +116,7 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[use_sim_time],
     )
+    
 
     return LaunchDescription(
         [
@@ -130,7 +131,7 @@ def generate_launch_description() -> LaunchDescription:
             # robot_state_pub,
             # sonar_launch,
             # sonar_filter,
-            # watertank_state_pub,
+            watertank_state_pub,
             rviz_node,
         ]
     )
