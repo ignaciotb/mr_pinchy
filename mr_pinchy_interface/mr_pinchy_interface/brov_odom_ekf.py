@@ -109,7 +109,7 @@ class QuaternionCvEkf:
     def __init__(
         self,
         position_std=0.01,
-        orientation_std=0.02,
+        orientation_std=0.12,
         linear_accel_std=0.5,
         angular_accel_std=1.0,
         gyro_std=0.05,
@@ -552,7 +552,7 @@ class BrovEKFOdom(Node):
             ],
             dtype=float,
         )
-        alpha = 0.2
+        alpha = 0.8
         previous = getattr(self, "_imu_gyro_lpf", None)
         if previous is None:
             filtered_angular_velocity = raw_angular_velocity

@@ -23,6 +23,9 @@ setup(
             glob('urdf/bluerov2_heavy/meshes/*.obj') +
             glob('urdf/bluerov2_heavy/meshes/*.mtl') +
             glob('urdf/bluerov2_heavy/meshes/*.dae')),
+        (os.path.join('share', package_name, 'urdf', 'watertank_description', 'urdf'), glob('urdf/watertank_description/urdf/*.urdf.xacro')),
+        (os.path.join('share', package_name, 'urdf', 'watertank_description', 'mesh'), glob('urdf/watertank_description/mesh/*.dae')),
+        (os.path.join('share', package_name, 'urdf', 'watertank_description', 'robots'), glob('urdf/watertank_description/robots/*.urdf.xacro')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -41,7 +44,9 @@ setup(
             'brov_ctrl_waypoint_twist = mr_pinchy_interface.brov_ctrl_waypoint_twist:main',
             'brov_ctrl_safe = mr_pinchy_interface.brov_ctrl_safe:main',
             'brov_ctrl_twist = mr_pinchy_interface.brov_ctrl_twist:main',
+            'brov_ctrl_twist_simple = mr_pinchy_interface.brov_ctrl_twist_simple:main',
             'brov_odom_ekf = mr_pinchy_interface.brov_odom_ekf:main',
+            'sonar_filter = mr_pinchy_interface.sonar_filter:main',
         ],
     },
 )

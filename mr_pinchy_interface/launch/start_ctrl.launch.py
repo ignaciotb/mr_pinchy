@@ -75,6 +75,16 @@ def generate_launch_description() -> LaunchDescription:
         name="robot_state_publisher",
         parameters=[{"robot_description": robot_description}, use_sim_time],
     )
+    
+    watertank_description = os.path.join(get_package_share_directory("mr_pinchy_interface"), "urdf", "watertank_description", "robots", "watertank_default.urdf.xacro")
+    watertank_description = xacro.process_file(watertank_description).toxml()
+    watertank_state_pub = Node(
+        package="robot_state_publisher",
+        executable="robot_state_publisher",
+        name="watertank_state_publisher",
+        parameters=[{"robot_description": watertank_description}, use_sim_time],
+        remappings=[("robot_description", "watertank_description")],
+    )
 
     rviz_node = Node(
         package="rviz2",
@@ -90,6 +100,22 @@ def generate_launch_description() -> LaunchDescription:
             os.path.join(sonar_pkg, 'launch', 'sonar_3d15.launch.py')
         )
     )
+    
+    twist_simple_controller = Node(
+        package="mr_pinchy_interface",
+        executable="brov_ctrl_twist_simple",
+        name="brov_ctrl_twist_simple",
+        output="screen",
+        parameters=[use_sim_time],
+    )
+    
+    sonar_filter = Node(
+        package="mr_pinchy_interface",
+        executable="sonar_filter",
+        name="sonar_filter",
+        output="screen",
+        parameters=[use_sim_time],
+    )
 
     return LaunchDescription(
         [
@@ -99,9 +125,12 @@ def generate_launch_description() -> LaunchDescription:
             # waypoint_wrench_controller,
             # waypoint_twist_controller,
             # twist_controller,
+            # twist_simple_controller,
             # safe_controller,
-            robot_state_pub,
+            # robot_state_pub,
             # sonar_launch,
+            # sonar_filter,
+            # watertank_state_pub,
             rviz_node,
         ]
     )

@@ -12,7 +12,6 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from mr_pinchy_interface.brov_utils import (
     PIDAxis,
     quat_to_rpy,
-    rpy_to_quat,
 )
 
 
@@ -34,7 +33,7 @@ class BrovWayPointTwistController(Node):
         self._publish_rate_hz = 30.0
         self._odom_timeout = 0.3
 
-        linear_vel_limit = 0.15
+        linear_vel_limit = 0.2
         self._pid_x = PIDAxis(
             kp=1.0, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
         )
@@ -42,26 +41,12 @@ class BrovWayPointTwistController(Node):
             kp=1.0, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
         )
         self._pid_z = PIDAxis(
-            kp=1.0, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
+            kp=1.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=linear_vel_limit
         )
         
-        angular_vel_limit = 0.15
-        self._pid_roll = PIDAxis(
-            kp=1.0,
-            ki=0.0,
-            kd=0.0,
-            integral_limit=1.0,
-            output_limit=angular_vel_limit,
-        )
-        self._pid_pitch = PIDAxis(
-            kp=1.0,
-            ki=0.0,
-            kd=0.0,
-            integral_limit=1.0,
-            output_limit=angular_vel_limit,
-        )
+        angular_vel_limit = 0.3
         self._pid_yaw = PIDAxis(
-            kp=3.0,
+            kp=1.0,
             ki=0.0,
             kd=0.1,
             integral_limit=1.0,
@@ -127,9 +112,7 @@ class BrovWayPointTwistController(Node):
         self._pid_x.reset()
         self._pid_y.reset()
         self._pid_z.reset()
-        self._pid_roll.reset()
-        self._pid_pitch.reset()
-        self._pid_yaw.reset()        
+        self._pid_yaw.reset()
         
     def _publish_zero_twist(self) -> None:
         twist = TwistStamped()
@@ -182,8 +165,6 @@ class BrovWayPointTwistController(Node):
         surge_pid = self._pid_x.step(ex, dt)
         sway_pid = self._pid_y.step(ey, dt)
         heave_pid = self._pid_z.step(ez, dt)
-        roll_pid = self._pid_roll.step(-eroll, dt, wrap_error=True)
-        pitch_pid = self._pid_pitch.step(-epitch, dt, wrap_error=True)
         yaw_pid = self._pid_yaw.step(eyaw, dt, wrap_error=True)
 
         stamp = self.get_clock().now().to_msg()
@@ -193,8 +174,6 @@ class BrovWayPointTwistController(Node):
         twist.twist.linear.x = surge_pid
         twist.twist.linear.y = sway_pid
         twist.twist.linear.z = heave_pid
-        twist.twist.angular.x = roll_pid
-        twist.twist.angular.y = pitch_pid
         twist.twist.angular.z = yaw_pid
         self._cmd_pub.publish(twist)
     
