@@ -33,11 +33,6 @@ setup(
     maintainer_email='ignaciotorroba@hotmail.com',
     description='TODO: Package description',
     license='TODO: License declaration',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
     entry_points={
         'console_scripts': [
             'brov_ctrl_waypoint_wrench = mr_pinchy_interface.brov_ctrl_waypoint_wrench:main',
