@@ -45,7 +45,7 @@ class BrovTwistSimpleController(Node):
 
         # PID gains for [surge, sway, heave, yaw]
         self._kp = np.array([5.0, 5.0, 1.0, 1.0], dtype=float)
-        self._ki = np.array([0.0, 0.0, 0.0, 0.0], dtype=float)
+        self._ki = np.array([0.5, 0.5, 0.5, 0.1], dtype=float)
         self._kd = np.array([0.0, 0.0, 0.0, 0.0], dtype=float)
         self._integral = np.zeros(4, dtype=float)
         self._integral_limit = np.array([0.5, 0.5, 0.5, 0.5], dtype=float)
@@ -246,7 +246,7 @@ class BrovTwistSimpleController(Node):
         y = float(output[1]) * output_limit
         z = float(-output[2]) * output_limit/2 + 500.0
         r = float(output[3]) * output_limit
-        alpha = 0.1
+        alpha = 0.5
         self._last_ctrl_cmd = alpha * np.array([x, y, z, r]) + (1 - alpha) * self._last_ctrl_cmd
 
         if self._debug_log:
