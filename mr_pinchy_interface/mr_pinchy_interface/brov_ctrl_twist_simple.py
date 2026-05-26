@@ -42,6 +42,7 @@ class BrovTwistSimpleController(Node):
         self._publish_rate_hz = 50.0
         self._odom_timeout_sec = 0.3
         self._tf_timeout = Duration(seconds=0.05)
+        self._cmd_timeout_sec = 0.3
 
         # PID gains for [surge, sway, heave, yaw]
         self._kp = np.array([5.0, 5.0, 1.0, 1.0], dtype=float)
@@ -169,9 +170,14 @@ class BrovTwistSimpleController(Node):
     def _tick(self) -> None:
         now = self.get_clock().now().nanoseconds * 1e-9
 
-        if self._last_cmd is None:
+        if self._last_cmd is None or (now - self._last_cmd_rx_sec) > self._cmd_timeout_sec:
             self._reset_pid()
             self._publish_neutral()
+            if self._last_cmd is not None:
+                self.get_logger().warn(
+                    f"Command timeout ({self._cmd_timeout_sec:.2f}s); forcing zero control.",
+                    throttle_duration_sec=2.0,
+                )
             return
 
         if self._last_odom is None or (now - self._last_odom_rx_sec) > self._odom_timeout_sec:
@@ -246,7 +252,7 @@ class BrovTwistSimpleController(Node):
         y = float(output[1]) * output_limit
         z = float(-output[2]) * output_limit/2 + 500.0
         r = float(output[3]) * output_limit
-        alpha = 0.5
+        alpha = 0.6
         self._last_ctrl_cmd = alpha * np.array([x, y, z, r]) + (1 - alpha) * self._last_ctrl_cmd
 
         if self._debug_log:

@@ -166,6 +166,7 @@ class BrovTwistController(Node):
         self._prev_velocity_error: np.ndarray | None = None
         self._prev_feedback_sec: float | None = None
         self._last_cmd_rx_sec: float = 0.0
+        self._cmd_timeout_sec = 0.3
         
         self.create_timer(1.0 / self._publish_rate_hz, self._tick)
         self.get_logger().info(
@@ -377,15 +378,15 @@ class BrovTwistController(Node):
     def _tick(self) -> None:
         now = self.get_clock().now().nanoseconds * 1e-9
 
-        if self._last_cmd is None:
+        if self._last_cmd is None or (now - self._last_cmd_rx_sec) > self._cmd_timeout_sec:
             self._nu_ref = None
             self._reset_feedback_state()
             self._publish_zero_wrench_and_rc()
-            # if self._last_cmd is not None:
-            #     self.get_logger().warn(
-            #         f"Command timeout ({self._cmd_timeout_sec:.2f}s); forcing zero control.",
-            #         throttle_duration_sec=2.0,
-            #     )
+            if self._last_cmd is not None:
+                self.get_logger().warn(
+                    f"Command timeout ({self._cmd_timeout_sec:.2f}s); forcing zero control.",
+                    throttle_duration_sec=2.0,
+                )
             return
 
         if self._last_odom is None or (now - self._last_odom_rx_sec) > self._odom_timeout_sec:

@@ -92,6 +92,7 @@ def generate_launch_description() -> LaunchDescription:
         name="rviz2",
         output="screen",
         arguments=["-d", LaunchConfiguration("rviz_config")],
+        parameters=[use_sim_time],
     )
     
     sonar_pkg = get_package_share_directory('waterlinked_sonar_3d15')
@@ -123,15 +124,12 @@ def generate_launch_description() -> LaunchDescription:
             rviz_config_arg,
             use_sim_time_arg,
             # ekf_odom,
-            # waypoint_wrench_controller,
             # waypoint_twist_controller,
-            # twist_controller,
             # twist_simple_controller,
-            # safe_controller,
-            # robot_state_pub,
-            # sonar_launch,
             # sonar_filter,
+            # sonar_launch,
             watertank_state_pub,
             rviz_node,
         ]
     )
+

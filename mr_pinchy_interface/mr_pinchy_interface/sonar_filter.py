@@ -29,9 +29,10 @@ class SonarFilter(Node):
         self.declare_parameter("tank_y_max", 9.0)
         self.declare_parameter("tank_z_min", -3.0)
         self.declare_parameter("tank_z_max", 0.0)
-        self.declare_parameter("wall_margin", 0.5)
-        self.declare_parameter("sor_k", 10)
-        self.declare_parameter("sor_alpha", 1.0)
+        self.declare_parameter("wall_margin", 0.8)
+        self.declare_parameter("sor_k", 6)
+        self.declare_parameter("sor_alpha", 0.5)
+        self.declare_parameter("sphere_radius", 2.0)
 
         self._map_frame: str = self.get_parameter("map_frame").value
         x_min = self.get_parameter("tank_x_min").value
@@ -43,6 +44,7 @@ class SonarFilter(Node):
         margin = self.get_parameter("wall_margin").value
         self._sor_k: int = self.get_parameter("sor_k").value
         self._sor_alpha: float = self.get_parameter("sor_alpha").value
+        self._sphere_radius: float = self.get_parameter("sphere_radius").value
 
         self._keep_min = np.array(
             [x_min + margin, y_min + margin, z_min + margin], dtype=np.float64
@@ -62,7 +64,8 @@ class SonarFilter(Node):
 
         self.get_logger().info(
             f"Sonar filter ready — map_frame={self._map_frame}, "
-            f"margin={margin}, sor_k={self._sor_k}, sor_alpha={self._sor_alpha}"
+            f"margin={margin}, sor_k={self._sor_k}, sor_alpha={self._sor_alpha}, "
+            f"sphere_radius={self._sphere_radius}"
         )
 
     def _pc_callback(self, msg: PointCloud2) -> None:
@@ -74,6 +77,13 @@ class SonarFilter(Node):
         finite_mask = np.isfinite(points).all(axis=1)
         if not finite_mask.all():
             points = points[finite_mask]
+        if points.shape[0] == 0:
+            self._publish_empty(msg.header)
+            return
+
+        dists_from_sonar = np.linalg.norm(points, axis=1)
+        sphere_mask = dists_from_sonar <= self._sphere_radius
+        points = points[sphere_mask]
         if points.shape[0] == 0:
             self._publish_empty(msg.header)
             return

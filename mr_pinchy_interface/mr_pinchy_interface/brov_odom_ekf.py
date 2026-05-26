@@ -108,8 +108,8 @@ def base_link_z_axis_angle_rad(q):
 class QuaternionCvEkf:
     def __init__(
         self,
-        position_std=0.05,
-        position_only_std=0.8,
+        position_std=0.2,
+        position_only_std=1.0,
         orientation_std=0.2,
         linear_accel_std=0.5,
         angular_accel_std=1.0,
@@ -220,33 +220,26 @@ class QuaternionCvEkf:
                 self.initialize(position_meas, orientation_meas)
             return both, both
 
-        if not position_accepted:
+        if (not position_accepted) or (not orientation_accepted):
             return False, False
 
         snap = self._snapshot()
-
-        if orientation_accepted:
-            residual = np.concatenate(
-                [position_residual, orientation_residual_vec]
-            )
-            h = np.zeros((6, 12), dtype=float)
-            h[0:3, 0:3] = np.eye(3)
-            h[3:6, 6:9] = np.eye(3)
-            r = np.diag(
-                [
-                    self.position_std**2,
-                    self.position_std**2,
-                    self.position_std**2,
-                    self.orientation_std**2,
-                    self.orientation_std**2,
-                    self.orientation_std**2,
-                ]
-            )
-        else:
-            residual = position_residual
-            h = np.zeros((3, 12), dtype=float)
-            h[0:3, 0:3] = np.eye(3)
-            r = np.eye(3, dtype=float) * self.position_only_std**2
+        residual = np.concatenate(
+            [position_residual, orientation_residual_vec]
+        )
+        h = np.zeros((6, 12), dtype=float)
+        h[0:3, 0:3] = np.eye(3)
+        h[3:6, 6:9] = np.eye(3)
+        r = np.diag(
+            [
+                self.position_std**2,
+                self.position_std**2,
+                self.position_std**2,
+                self.orientation_std**2,
+                self.orientation_std**2,
+                self.orientation_std**2,
+            ]
+        )
 
         pht = self.covariance @ h.T
         s = h @ pht + r
