@@ -1,5 +1,3 @@
-import math
-
 import rclpy
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry
@@ -35,20 +33,20 @@ class BrovWayPointTwistController(Node):
 
         linear_vel_limit = 0.2
         self._pid_x = PIDAxis(
-            kp=1.0, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
+            kp=0.5, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
         )
         self._pid_y = PIDAxis(
-            kp=1.0, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
+            kp=0.3, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
         )
         self._pid_z = PIDAxis(
-            kp=1.0, ki=0.0, kd=0.1, integral_limit=1.0, output_limit=linear_vel_limit
+            kp=0.3, ki=0.0, kd=0, integral_limit=1.0, output_limit=linear_vel_limit
         )
         
         angular_vel_limit = 0.3
         self._pid_yaw = PIDAxis(
-            kp=1.0,
+            kp=0.5,
             ki=0.0,
-            kd=0.1,
+            kd=0.0,
             integral_limit=1.0,
             output_limit=angular_vel_limit,
         )
@@ -61,6 +59,8 @@ class BrovWayPointTwistController(Node):
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
         self._goal_pose: PoseStamped | None = None
+        self._goal_in_odom: PoseStamped | None = None
+        self._last_odom: Odometry | None = None
         self._last_odom_rx_sec: float = 0.0
         self._last_tick_sec: float = 0.0
 
@@ -68,7 +68,8 @@ class BrovWayPointTwistController(Node):
         
     def _goal_cb(self, msg: PoseStamped):
         self._goal_pose = msg
-        self._goal_pose.pose.position.z = -1.0
+        self._goal_pose.pose.position.z = -1.2
+        self._goal_in_odom = None
         self._reset_pid()
         self.get_logger().info(
             f"Received new goal pose: frame_id='{msg.header.frame_id}', "
@@ -76,37 +77,43 @@ class BrovWayPointTwistController(Node):
             f"orientation=({msg.pose.orientation.x:.3f}, {msg.pose.orientation.y:.3f}, {msg.pose.orientation.z:.3f}, {msg.pose.orientation.w:.3f})"
         )
 
-    def _odom_cb(self, _msg: Odometry) -> None:
+    def _odom_cb(self, msg: Odometry) -> None:
+        self._last_odom = msg
         self._last_odom_rx_sec = self.get_clock().now().nanoseconds / 1e9
     
-    def _goal_in_base_link(self) -> PoseStamped | None:
-        if self._goal_pose is None:
-            return None
+    def _resolve_goal_in_odom(self) -> bool:
+        if self._goal_in_odom is not None:
+            return True
+        if self._goal_pose is None or self._last_odom is None:
+            return False
+
+        goal_frame = self._goal_pose.header.frame_id or self._map_frame
+        odom_frame = self._last_odom.header.frame_id
+        if not odom_frame:
+            return False
 
         src = PoseStamped()
-        src.header = self._goal_pose.header
+        src.header.frame_id = goal_frame
         src.pose = self._goal_pose.pose
 
-        if not src.header.frame_id:
-            src.header.frame_id = self._map_frame
-
-        if src.header.frame_id == self._base_link_frame:
-            return src
+        if goal_frame == odom_frame:
+            self._goal_in_odom = src
+            return True
 
         try:
             tf = self._tf_buffer.lookup_transform(
-                self._base_link_frame,
-                src.header.frame_id,
-                rclpy.time.Time(),
+                odom_frame, goal_frame, rclpy.time.Time(),
                 timeout=Duration(seconds=0.05),
             )
-            return do_transform_pose_stamped(src, tf)
+            self._goal_in_odom = do_transform_pose_stamped(src, tf)
+            return True
         except TransformException as exc:
+            self._goal_in_odom = None
             self.get_logger().warn(
-                f"TF {src.header.frame_id} -> {self._base_link_frame} unavailable: {exc}",
+                f"TF {goal_frame} -> {odom_frame} unavailable: {exc}",
                 throttle_duration_sec=2.0,
             )
-            return None
+            return False
     
     def _reset_pid(self) -> None:
         self._pid_x.reset()
@@ -145,32 +152,37 @@ class BrovWayPointTwistController(Node):
             )
             return
         
-        goal_in_base = self._goal_in_base_link()
-        if goal_in_base is None:
+        if not self._resolve_goal_in_odom():
             self._publish_zero_twist()
             return
-        goal = goal_in_base.pose
-        
-        ex = goal.position.x
-        ey = goal.position.y
-        ez = goal.position.z
 
-        eroll, epitch, eyaw = quat_to_rpy(
-            goal.orientation.x,
-            goal.orientation.y,
-            goal.orientation.z,
-            goal.orientation.w,
+        goal = self._goal_in_odom.pose
+        odom_pose = self._last_odom.pose.pose
+
+        ex = goal.position.x - odom_pose.position.x
+        ey = goal.position.y - odom_pose.position.y
+        ez = goal.position.z - odom_pose.position.z
+
+        _, _, goal_yaw = quat_to_rpy(
+            goal.orientation.x, goal.orientation.y,
+            goal.orientation.z, goal.orientation.w,
         )
+        _, _, current_yaw = quat_to_rpy(
+            odom_pose.orientation.x, odom_pose.orientation.y,
+            odom_pose.orientation.z, odom_pose.orientation.w,
+        )
+        eyaw = goal_yaw - current_yaw
 
         surge_pid = self._pid_x.step(ex, dt)
         sway_pid = self._pid_y.step(ey, dt)
         heave_pid = self._pid_z.step(ez, dt)
         yaw_pid = self._pid_yaw.step(eyaw, dt, wrap_error=True)
 
+        odom_frame = self._last_odom.header.frame_id
         stamp = self.get_clock().now().to_msg()
         twist = TwistStamped()
         twist.header.stamp = stamp
-        twist.header.frame_id = self._base_link_frame
+        twist.header.frame_id = odom_frame
         twist.twist.linear.x = surge_pid
         twist.twist.linear.y = sway_pid
         twist.twist.linear.z = heave_pid

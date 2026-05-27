@@ -18,6 +18,7 @@ setup(
             glob('launch/*.launch.py'),
         ),
         (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
+        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         (os.path.join('share', package_name, 'urdf'), glob('urdf/*.urdf.xacro')),
         (os.path.join('share', package_name, 'urdf', 'bluerov2_heavy', 'meshes'),
             glob('urdf/bluerov2_heavy/meshes/*.obj') +
@@ -41,6 +42,7 @@ setup(
             'brov_ctrl_twist = mr_pinchy_interface.brov_ctrl_twist:main',
             'brov_ctrl_twist_simple = mr_pinchy_interface.brov_ctrl_twist_simple:main',
             'brov_odom_ekf = mr_pinchy_interface.brov_odom_ekf:main',
+            'brov_odom_ekf_ros2 = mr_pinchy_interface.brov_odom_ekf_ros2:main',
             'sonar_filter = mr_pinchy_interface.sonar_filter:main',
         ],
     },

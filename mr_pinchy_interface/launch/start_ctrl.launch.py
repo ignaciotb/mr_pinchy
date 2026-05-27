@@ -123,11 +123,11 @@ def generate_launch_description() -> LaunchDescription:
         [
             rviz_config_arg,
             use_sim_time_arg,
-            # ekf_odom,
-            # waypoint_twist_controller,
-            # twist_simple_controller,
-            # sonar_filter,
-            # sonar_launch,
+            ekf_odom,
+            waypoint_twist_controller,
+            twist_simple_controller,
+            sonar_filter,
+            sonar_launch,
             watertank_state_pub,
             rviz_node,
         ]

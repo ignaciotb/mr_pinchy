@@ -45,17 +45,17 @@ class BrovTwistSimpleController(Node):
         self._cmd_timeout_sec = 0.3
 
         # PID gains for [surge, sway, heave, yaw]
-        self._kp = np.array([5.0, 5.0, 1.0, 1.0], dtype=float)
-        self._ki = np.array([0.5, 0.5, 0.5, 0.1], dtype=float)
+        self._kp = np.array([7., 8, 2.5, 1.4], dtype=float)
+        self._ki = np.array([0.5, 0.5, 0.1, 0.3], dtype=float)
         self._kd = np.array([0.0, 0.0, 0.0, 0.0], dtype=float)
         self._integral = np.zeros(4, dtype=float)
         self._integral_limit = np.array([0.5, 0.5, 0.5, 0.5], dtype=float)
 
         # Feedforward: linear mapping from commanded velocity to control output
-        self._kff = np.array([1.0 / 0.27, 1.0 / 0.2, 1.0 / 0.3, 1.0 / 0.65], dtype=float)
+        self._kff = np.array([1.0 / 0.3, 1.0 / 0.25, 1.0 / 0.3, 1.0 / 0.65], dtype=float)
 
         # Tank safety bounds: [[x_min, y_min, z_min], [x_max, y_max, z_max]]
-        self._tank_range = np.array([[1.0, -1.8, 0.5], [6.0, 1.8, 3.0]])
+        self._tank_range = np.array([[1.0, -1.8, 0.0], [6.0, 1.8, 3.0]])
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self._mc_pub = self.create_publisher(ManualControl, mc_topic, qos)
@@ -252,9 +252,9 @@ class BrovTwistSimpleController(Node):
         y = float(output[1]) * output_limit
         z = float(-output[2]) * output_limit/2 + 500.0
         r = float(output[3]) * output_limit
-        alpha = 0.6
+        alpha = np.array([0.7, 0.7, 0.9, 0.7], dtype=float)
         self._last_ctrl_cmd = alpha * np.array([x, y, z, r]) + (1 - alpha) * self._last_ctrl_cmd
-
+        
         if self._debug_log:
             self.get_logger().info(
                 f"err=({error[0]:.3f},{error[1]:.3f},{error[2]:.3f},{error[3]:.3f}) "

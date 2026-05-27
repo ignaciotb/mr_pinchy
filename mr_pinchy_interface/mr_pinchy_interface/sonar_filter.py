@@ -5,6 +5,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
+from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial import KDTree
 from sensor_msgs.msg import PointCloud2, PointField
 from tf2_ros import Buffer, TransformException, TransformListener
@@ -33,6 +34,8 @@ class SonarFilter(Node):
         self.declare_parameter("sor_k", 6)
         self.declare_parameter("sor_alpha", 0.5)
         self.declare_parameter("sphere_radius", 2.0)
+        self.declare_parameter("cluster_dist", 0.05)
+        self.declare_parameter("min_cluster_size", 20)
 
         self._map_frame: str = self.get_parameter("map_frame").value
         x_min = self.get_parameter("tank_x_min").value
@@ -45,6 +48,8 @@ class SonarFilter(Node):
         self._sor_k: int = self.get_parameter("sor_k").value
         self._sor_alpha: float = self.get_parameter("sor_alpha").value
         self._sphere_radius: float = self.get_parameter("sphere_radius").value
+        self._cluster_dist: float = self.get_parameter("cluster_dist").value
+        self._min_cluster_size: int = self.get_parameter("min_cluster_size").value
 
         self._keep_min = np.array(
             [x_min + margin, y_min + margin, z_min + margin], dtype=np.float64
@@ -65,7 +70,8 @@ class SonarFilter(Node):
         self.get_logger().info(
             f"Sonar filter ready — map_frame={self._map_frame}, "
             f"margin={margin}, sor_k={self._sor_k}, sor_alpha={self._sor_alpha}, "
-            f"sphere_radius={self._sphere_radius}"
+            f"sphere_radius={self._sphere_radius}, "
+            f"cluster_dist={self._cluster_dist}, min_cluster_size={self._min_cluster_size}"
         )
 
     def _pc_callback(self, msg: PointCloud2) -> None:
@@ -124,6 +130,21 @@ class SonarFilter(Node):
             global_std = mean_dists.std()
             sor_mask = mean_dists <= global_mean + self._sor_alpha * global_std
             pts_map = pts_map[sor_mask]
+
+        if pts_map.shape[0] == 0:
+            self._publish_empty(msg.header)
+            return
+
+        if pts_map.shape[0] >= self._min_cluster_size:
+            Z = linkage(pts_map, method="single")
+            labels = fcluster(Z, t=self._cluster_dist, criterion="distance")
+            unique, counts = np.unique(labels, return_counts=True)
+            big = unique[counts >= self._min_cluster_size]
+            if big.size > 0:
+                pts_map = pts_map[np.isin(labels, big)]
+            else:
+                self._publish_empty(msg.header)
+                return
 
         if pts_map.shape[0] == 0:
             self._publish_empty(msg.header)
