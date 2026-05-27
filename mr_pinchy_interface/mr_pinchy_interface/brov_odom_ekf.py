@@ -109,7 +109,6 @@ class QuaternionCvEkf:
     def __init__(
         self,
         position_std=0.2,
-        position_only_std=1.0,
         orientation_std=0.2,
         linear_accel_std=0.5,
         angular_accel_std=1.0,
@@ -119,10 +118,9 @@ class QuaternionCvEkf:
         max_orientation_innovation_rad=0.75,
         max_base_link_z_axis_angle_rad=0.4,
         max_gyro_innovation_rad_s=2.0,
-        max_dvl_innovation_m_s=1.0,
+        max_dvl_innovation_m_s=1.5,
     ):
         self.position_std = position_std
-        self.position_only_std = position_only_std
         self.orientation_std = orientation_std
         self.linear_accel_std = linear_accel_std
         self.angular_accel_std = angular_accel_std
@@ -218,10 +216,10 @@ class QuaternionCvEkf:
             both = position_accepted and orientation_accepted
             if both:
                 self.initialize(position_meas, orientation_meas)
-            return both, both
+            return both
 
         if (not position_accepted) or (not orientation_accepted):
-            return False, False
+            return False
 
         snap = self._snapshot()
         residual = np.concatenate(
@@ -260,8 +258,8 @@ class QuaternionCvEkf:
 
         if not self._orientation_z_safe():
             self._restore(snap)
-            return False, False
-        return True, orientation_accepted
+            return False
+        return True
 
     def _check_pose_measurement(
         self,
@@ -302,7 +300,6 @@ class QuaternionCvEkf:
     def reset_copy(self):
         return QuaternionCvEkf(
             position_std=self.position_std,
-            position_only_std=self.position_only_std,
             orientation_std=self.orientation_std,
             linear_accel_std=self.linear_accel_std,
             angular_accel_std=self.angular_accel_std,
@@ -586,18 +583,13 @@ class BrovEKFOdom(Node):
             dtype=float,
         )
 
-        pos_used, ori_used = self._filter.update(
+        accepted = self._filter.update(
             position,
             orientation,
         )
-        if not pos_used:
+        if not accepted:
             self.get_logger().warn(
-                "All mocap measurement rejected.",
-                throttle_duration_sec=1.0,
-            )
-        elif not ori_used:
-            self.get_logger().warn(
-                "Mocap orientation rejected, using position only.",
+                "Mocap measurement rejected.",
                 throttle_duration_sec=1.0,
             )
 

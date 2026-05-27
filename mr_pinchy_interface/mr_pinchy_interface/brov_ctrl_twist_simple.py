@@ -38,21 +38,31 @@ class BrovTwistSimpleController(Node):
         mc_topic = str(self.get_parameter("manual_control_topic").value)
         self._base_link_frame = normalize_tf_frame_id(self.get_parameter("base_link_frame").value)
 
-        self._debug_log = False
+        self._debug_log = True
         self._publish_rate_hz = 50.0
         self._odom_timeout_sec = 0.3
         self._tf_timeout = Duration(seconds=0.05)
         self._cmd_timeout_sec = 0.3
 
         # PID gains for [surge, sway, heave, yaw]
-        self._kp = np.array([7., 8, 2.5, 1.4], dtype=float)
-        self._ki = np.array([0.5, 0.5, 0.1, 0.3], dtype=float)
-        self._kd = np.array([0.0, 0.0, 0.0, 0.0], dtype=float)
+        self._kp = np.array([2, 2, 0.8, 0.8], dtype=float)
+        self._ki = np.array([0.1, 0.1, 0.4, 0.1], dtype=float)
+        self._kd = np.array([0.0, 0.0, 0.2, 0.0], dtype=float)
         self._integral = np.zeros(4, dtype=float)
-        self._integral_limit = np.array([0.5, 0.5, 0.5, 0.5], dtype=float)
+        # Heave needs more integral authority to absorb the constant buoyancy bias.
+        self._integral_limit = np.array([0.5, 0.5, 1.0, 0.5], dtype=float)
 
         # Feedforward: linear mapping from commanded velocity to control output
-        self._kff = np.array([1.0 / 0.3, 1.0 / 0.25, 1.0 / 0.3, 1.0 / 0.65], dtype=float)
+        self._kff = np.array([1.0 / 0.5, 1.0 / 0.4, 1.0 / 0.6, 1.0 / 1.3], dtype=float)
+
+        # # PID gains for [surge, sway, heave, yaw]
+        # self._kp = np.array([7., 8, 2.5, 1.4], dtype=float)
+        # self._ki = np.array([0.5, 0.5, 0.1, 0.3], dtype=float)
+        # self._kd = np.array([0.0, 0.0, 0.0, 0.0], dtype=float)
+        # self._integral = np.zeros(4, dtype=float)
+        # self._integral_limit = np.array([0.5, 0.5, 0.5, 0.5], dtype=float)
+        # # Feedforward: linear mapping from commanded velocity to control output
+        # self._kff = np.array([1.0 / 0.3, 1.0 / 0.25, 1.0 / 0.3, 1.0 / 0.65], dtype=float)
 
         # Tank safety bounds: [[x_min, y_min, z_min], [x_max, y_max, z_max]]
         self._tank_range = np.array([[1.0, -1.8, 0.0], [6.0, 1.8, 3.0]])
@@ -252,7 +262,7 @@ class BrovTwistSimpleController(Node):
         y = float(output[1]) * output_limit
         z = float(-output[2]) * output_limit/2 + 500.0
         r = float(output[3]) * output_limit
-        alpha = np.array([0.7, 0.7, 0.9, 0.7], dtype=float)
+        alpha = np.array([0.7, 0.7, 0.7, 0.7], dtype=float)
         self._last_ctrl_cmd = alpha * np.array([x, y, z, r]) + (1 - alpha) * self._last_ctrl_cmd
         
         if self._debug_log:

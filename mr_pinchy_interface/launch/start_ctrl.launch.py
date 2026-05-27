@@ -128,17 +128,17 @@ def generate_launch_description() -> LaunchDescription:
         name='teleop_twist_joy',
         parameters=[{
             # Surge — left stick Y (axis 1: up = +1 → forward)
-            'axis_linear.x':  1,  'scale_linear.x':  0.3,
+            'axis_linear.x':  1,  'scale_linear.x':  0.15,
             'scale_linear_turbo.x': 0.6,
 
             # Sway — left stick X (axis 0: left = +1 → +y in FLU ✓)
-            'axis_linear.y':  0,  'scale_linear.y':  0.3,
+            'axis_linear.y':  0,  'scale_linear.y':  0.15,
 
             # Heave — right stick Y (axis 4: up = +1 → ascend = +z ✓)
-            'axis_linear.z':  4,  'scale_linear.z':  0.3,
+            'axis_linear.z':  4,  'scale_linear.z':  0.15,
 
             # Yaw — right stick X (axis 3: left = +1 → CCW = +z ang ✓ in REP-103)
-            'axis_angular.yaw': 3, 'scale_angular.yaw': 0.4,
+            'axis_angular.yaw': 3, 'scale_angular.yaw': 0.3,
 
             # Deadman on RB
             'enable_button': 5,
@@ -154,10 +154,9 @@ def generate_launch_description() -> LaunchDescription:
             rviz_config_arg,
             use_sim_time_arg,
             ekf_odom,
-            # waypoint_twist_controller,
             twist_simple_controller,
-            # sonar_filter,
-            # sonar_launch,
+            sonar_filter,
+            sonar_launch,
             joy_node,
             teleop_node,
             watertank_state_pub,

@@ -33,7 +33,7 @@ class SonarFilter(Node):
         self.declare_parameter("wall_margin", 0.8)
         self.declare_parameter("sor_k", 6)
         self.declare_parameter("sor_alpha", 0.5)
-        self.declare_parameter("sphere_radius", 2.0)
+        self.declare_parameter("sphere_radius", 3.0)
         self.declare_parameter("cluster_dist", 0.05)
         self.declare_parameter("min_cluster_size", 20)
 
