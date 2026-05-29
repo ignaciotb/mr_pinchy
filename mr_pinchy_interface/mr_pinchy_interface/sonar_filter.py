@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from collections import deque
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -9,6 +10,7 @@ from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial import KDTree
 from sensor_msgs.msg import PointCloud2, PointField
 from tf2_ros import Buffer, TransformException, TransformListener
+import time
 
 from mr_pinchy_interface.brov_utils import quat_to_rotation_matrix
 
@@ -36,6 +38,10 @@ class SonarFilter(Node):
         self.declare_parameter("sphere_radius", 3.0)
         self.declare_parameter("cluster_dist", 0.05)
         self.declare_parameter("min_cluster_size", 20)
+        self.declare_parameter("watchdog_min_hz", 4.0)
+        self.declare_parameter("watchdog_max_jitter_hz", 3.0)
+        self.declare_parameter("watchdog_window", 20)
+        self.declare_parameter("watchdog_check_period", 2.0)
 
         self._map_frame: str = self.get_parameter("map_frame").value
         x_min = self.get_parameter("tank_x_min").value
@@ -50,6 +56,12 @@ class SonarFilter(Node):
         self._sphere_radius: float = self.get_parameter("sphere_radius").value
         self._cluster_dist: float = self.get_parameter("cluster_dist").value
         self._min_cluster_size: int = self.get_parameter("min_cluster_size").value
+        self._watchdog_min_hz: float = self.get_parameter("watchdog_min_hz").value
+        self._watchdog_max_jitter_hz: float = self.get_parameter("watchdog_max_jitter_hz").value
+        watchdog_window: int = self.get_parameter("watchdog_window").value
+        watchdog_check_period: float = self.get_parameter("watchdog_check_period").value
+
+        self._msg_times: deque = deque(maxlen=watchdog_window)
 
         self._keep_min = np.array(
             [x_min + margin, y_min + margin, z_min + margin], dtype=np.float64
@@ -66,6 +78,7 @@ class SonarFilter(Node):
         self.create_subscription(
             PointCloud2, "/sonar_node/point_cloud", self._pc_callback, 10
         )
+        self.create_timer(watchdog_check_period, self._watchdog_cb)
 
         self.get_logger().info(
             f"Sonar filter ready — map_frame={self._map_frame}, "
@@ -74,10 +87,50 @@ class SonarFilter(Node):
             f"cluster_dist={self._cluster_dist}, min_cluster_size={self._min_cluster_size}"
         )
 
+    def _watchdog_cb(self) -> None:
+        now = time.time()
+
+        if len(self._msg_times) < 2:
+            self.get_logger().warn(
+                "Sonar watchdog: no messages received from sonar",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        age = now - self._msg_times[-1]
+        stale_threshold = 3.0 / self._watchdog_min_hz
+        if age > stale_threshold:
+            self.get_logger().warn(
+                f"Sonar watchdog: last message was {age:.2f}s ago "
+                f"(expected < {stale_threshold:.2f}s at {self._watchdog_min_hz} Hz)",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        intervals = np.diff(np.array(self._msg_times))
+        freqs = 1.0 / intervals
+        mean_hz = float(freqs.mean())
+        std_hz = float(freqs.std())
+
+        if mean_hz < self._watchdog_min_hz:
+            self.get_logger().warn(
+                f"Sonar watchdog: low frequency {mean_hz:.2f} Hz "
+                f"(min {self._watchdog_min_hz} Hz)",
+                throttle_duration_sec=2.0,
+            )
+        if std_hz > self._watchdog_max_jitter_hz:
+            self.get_logger().warn(
+                f"Sonar watchdog: unstable frequency — "
+                f"std {std_hz:.2f} Hz, mean {mean_hz:.2f} Hz "
+                f"(max jitter {self._watchdog_max_jitter_hz} Hz)",
+                throttle_duration_sec=2.0,
+            )
+
     def _pc_callback(self, msg: PointCloud2) -> None:
         if msg.width == 0:
             return
-
+        time_start = time.time()
+        self._msg_times.append(time_start)
         points = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 3).copy()
 
         finite_mask = np.isfinite(points).all(axis=1)
@@ -163,6 +216,12 @@ class SonarFilter(Node):
         cloud.data = pts_sonar.tobytes()
         cloud.is_dense = True
         self._pc_pub.publish(cloud)
+        time_end = time.time()
+        if time_end - time_start > 0.05:
+            self.get_logger().warn(
+                f"Sonar filter process took too long: {time_end - time_start:.3f} seconds",
+                throttle_duration_sec=2.0,
+            )
 
     def _publish_empty(self, header) -> None:
         cloud = PointCloud2()

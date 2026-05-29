@@ -44,28 +44,28 @@ class BrovTwistSimpleController(Node):
         self._tf_timeout = Duration(seconds=0.05)
         self._cmd_timeout_sec = 0.3
 
-        # PID gains for [surge, sway, heave, yaw]
-        self._kp = np.array([2, 2, 0.8, 0.8], dtype=float)
-        self._ki = np.array([0.1, 0.1, 0.4, 0.1], dtype=float)
-        self._kd = np.array([0.0, 0.0, 0.2, 0.0], dtype=float)
-        self._integral = np.zeros(4, dtype=float)
-        # Heave needs more integral authority to absorb the constant buoyancy bias.
-        self._integral_limit = np.array([0.5, 0.5, 1.0, 0.5], dtype=float)
-
-        # Feedforward: linear mapping from commanded velocity to control output
-        self._kff = np.array([1.0 / 0.5, 1.0 / 0.4, 1.0 / 0.6, 1.0 / 1.3], dtype=float)
-
         # # PID gains for [surge, sway, heave, yaw]
-        # self._kp = np.array([7., 8, 2.5, 1.4], dtype=float)
-        # self._ki = np.array([0.5, 0.5, 0.1, 0.3], dtype=float)
-        # self._kd = np.array([0.0, 0.0, 0.0, 0.0], dtype=float)
+        # self._kp = np.array([2, 2, 0.8, 0.8], dtype=float)
+        # self._ki = np.array([0.1, 0.1, 0.4, 0.1], dtype=float)
+        # self._kd = np.array([0.0, 0.0, 0.2, 0.0], dtype=float)
         # self._integral = np.zeros(4, dtype=float)
-        # self._integral_limit = np.array([0.5, 0.5, 0.5, 0.5], dtype=float)
+        # # Heave needs more integral authority to absorb the constant buoyancy bias.
+        # self._integral_limit = np.array([0.5, 0.5, 1.0, 0.5], dtype=float)
+
         # # Feedforward: linear mapping from commanded velocity to control output
-        # self._kff = np.array([1.0 / 0.3, 1.0 / 0.25, 1.0 / 0.3, 1.0 / 0.65], dtype=float)
+        # self._kff = np.array([1.0 / 0.5, 1.0 / 0.4, 1.0 / 0.6, 1.0 / 1.3], dtype=float)
+
+        # PID gains for [surge, sway, heave, yaw]
+        self._kp = np.array([7., 8, 2.5, 1.4], dtype=float)
+        self._ki = np.array([0.5, 0.5, 0.1, 0.3], dtype=float)
+        self._kd = np.array([0.0, 0.0, 0.0, 0.0], dtype=float)
+        self._integral = np.zeros(4, dtype=float)
+        self._integral_limit = np.array([0.5, 0.5, 0.5, 0.5], dtype=float)
+        # Feedforward: linear mapping from commanded velocity to control output
+        self._kff = np.array([1.0 / 0.3, 1.0 / 0.25, 1.0 / 0.3, 1.0 / 0.65], dtype=float)
 
         # Tank safety bounds: [[x_min, y_min, z_min], [x_max, y_max, z_max]]
-        self._tank_range = np.array([[1.0, -1.8, 0.0], [6.0, 1.8, 3.0]])
+        self._tank_range = np.array([[1.0, -1.8, 0.5], [6.0, 1.8, 3.0]])
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self._mc_pub = self.create_publisher(ManualControl, mc_topic, qos)
