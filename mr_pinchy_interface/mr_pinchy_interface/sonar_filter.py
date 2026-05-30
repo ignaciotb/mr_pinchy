@@ -32,7 +32,7 @@ class SonarFilter(Node):
         self.declare_parameter("tank_y_max", 9.0)
         self.declare_parameter("tank_z_min", -3.0)
         self.declare_parameter("tank_z_max", 0.0)
-        self.declare_parameter("wall_margin", 0.8)
+        self.declare_parameter("wall_margin", 0.4)
         self.declare_parameter("sor_k", 6)
         self.declare_parameter("sor_alpha", 0.5)
         self.declare_parameter("sphere_radius", 3.0)

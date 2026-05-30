@@ -362,7 +362,7 @@ class BrovOdomEkfRos2(Node):
         sonar_transform = TransformStamped()
         sonar_transform.header.stamp = stamp
         sonar_transform.header.frame_id = self._child_frame
-        sonar_transform.child_frame_id = "mr_pinchy/sonar_link"
+        sonar_transform.child_frame_id = "mr_pinchy/sonar_link_ekf"
         sonar_transform.transform.translation.x = 0.220
         sonar_transform.transform.translation.y = 0.0
         sonar_transform.transform.translation.z = -0.160

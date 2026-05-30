@@ -31,15 +31,15 @@ class BrovWayPointTwistController(Node):
         self._publish_rate_hz = 30.0
         self._odom_timeout = 0.3
 
-        linear_vel_limit = 0.2
+        linear_vel_limit = 0.15
         self._pid_x = PIDAxis(
             kp=0.5, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
         )
         self._pid_y = PIDAxis(
-            kp=0.3, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
+            kp=0.5, ki=0.0, kd=0., integral_limit=1.0, output_limit=linear_vel_limit
         )
         self._pid_z = PIDAxis(
-            kp=0.3, ki=0.0, kd=0, integral_limit=1.0, output_limit=linear_vel_limit
+            kp=0.5, ki=0.0, kd=0, integral_limit=1.0, output_limit=linear_vel_limit
         )
         
         angular_vel_limit = 0.3
