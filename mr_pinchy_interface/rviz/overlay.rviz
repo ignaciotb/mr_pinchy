@@ -1,0 +1,336 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 0
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /TF1
+        - /TF1/Frames1
+        - /Camera1
+      Splitter Ratio: 0.5
+    Tree Height: 399
+  - Class: rviz_common/Selection
+    Name: Selection
+  - Class: rviz_common/Tool Properties
+    Expanded:
+      - /Publish Point1
+    Name: Tool Properties
+    Splitter Ratio: 0.5886790156364441
+  - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+    Splitter Ratio: 0.5
+  - Class: rviz_common/Time
+    Experimental: false
+    Name: Time
+    SyncMode: 0
+    SyncSource: ""
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Line Style:
+        Line Width: 0.029999999329447746
+        Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Plane: XY
+      Plane Cell Count: 10
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: false
+        beckholmen_map:
+          Value: true
+        camera_link:
+          Value: true
+        camera_optical_frame:
+          Value: false
+        docktip/base_link:
+          Value: true
+        floatsam/base_link:
+          Value: true
+        itrl_rov_1/base_link:
+          Value: true
+        itrl_rov_1/dvl_frame:
+          Value: true
+        itrl_rov_1/sonar_link:
+          Value: true
+        landing_pad_optitrack:
+          Value: true
+        map:
+          Value: true
+        mocap:
+          Value: true
+        mr_pinchy/base_link:
+          Value: true
+        mr_pinchy/dvl_frame:
+          Value: true
+        mr_pinchy/sonar_link:
+          Value: true
+        sam/back_prop_link:
+          Value: true
+        sam/base_link:
+          Value: true
+        sam/camera_down_link:
+          Value: true
+        sam/camera_front_left_link:
+          Value: true
+        sam/camera_front_link:
+          Value: true
+        sam/camera_front_right_link:
+          Value: true
+        sam/dvl_link:
+          Value: true
+        sam/front_prop_link:
+          Value: true
+        sam/gps_link:
+          Value: true
+        sam/imu_link:
+          Value: true
+        sam/pressure_link:
+          Value: true
+        sam/sbg_link:
+          Value: true
+        sam/sidescan_link:
+          Value: true
+        sam/thruster_link:
+          Value: true
+        sam/thruster_yaw_link:
+          Value: true
+        sam/uw_gps_link:
+          Value: true
+        splash/base_link_ekf:
+          Value: true
+        splash/base_link_ekf_flu:
+          Value: true
+        splashy2/base_link:
+          Value: true
+        tank_base:
+          Value: true
+        tank_local:
+          Value: true
+        thruster1:
+          Value: true
+        thruster2:
+          Value: true
+        thruster3:
+          Value: true
+        thruster4:
+          Value: true
+        thruster5:
+          Value: true
+        thruster6:
+          Value: true
+        thruster7:
+          Value: true
+        thruster8:
+          Value: true
+        unity_tank/map:
+          Value: true
+      Marker Scale: 1
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Tree:
+        unity_tank/map:
+          tank_local:
+            tank_base:
+              mocap:
+                camera_link:
+                  camera_optical_frame:
+                    {}
+                docktip/base_link:
+                  {}
+                map:
+                  beckholmen_map:
+                    {}
+                splash/base_link_ekf:
+                  splash/base_link_ekf_flu:
+                    {}
+                splashy2/base_link:
+                  {}
+      Update Interval: 0
+      Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/RobotModel
+      Collision Enabled: false
+      Description File: ""
+      Description Source: Topic
+      Description Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /tank_description
+      Enabled: false
+      Links:
+        All Links Enabled: true
+        Expand Joint Details: false
+        Expand Link Details: false
+        Expand Tree: false
+        Link Tree Style: Links in Alphabetic Order
+      Mass Properties:
+        Inertia: false
+        Mass: false
+      Name: RobotModel
+      TF Prefix: ""
+      Update Interval: 0
+      Value: false
+      Visual Enabled: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Trajectory
+      Namespaces:
+        trajectory: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /trajectory
+      Value: true
+    - Class: rviz_default_plugins/Camera
+      Enabled: true
+      Far Plane Distance: 100
+      Image Rendering: background and overlay
+      Name: Camera
+      Overlay Alpha: 0.5
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /camera/image_raw
+      Value: true
+      Visibility:
+        Grid: false
+        Image: true
+        Marker: true
+        RobotModel: true
+        TF: false
+        Trajectory: true
+        Value: true
+      Zoom Factor: 1
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /camera/image_raw
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Marker
+      Namespaces:
+        robot: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot_marker
+      Value: true
+    - Class: rviz_default_plugins/InteractiveMarkers
+      Enable Transparency: true
+      Enabled: true
+      Interactive Markers Namespace: /overlay_calib
+      Name: CameraPoseMarker
+      Show Axes: false
+      Show Descriptions: true
+      Show Visual Aids: false
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+    - Class: rviz_default_plugins/PublishPoint
+      Single click: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /clicked_point
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 17.16891098022461
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.05999999865889549
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0.3263627290725708
+        Y: 0.6638346314430237
+        Z: -0.5133456587791443
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05000000074505806
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.009999999776482582
+      Pitch: 0.5797970294952393
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz_default_plugins)
+      Yaw: 1.5300030708312988
+    Saved: ~
+Window Geometry:
+  Camera:
+    collapsed: false
+  Displays:
+    collapsed: false
+  Height: 1403
+  Hide Left Dock: false
+  Hide Right Dock: false
+  Image:
+    collapsed: false
+  QMainWindow State: 000000ff00000000fd00000001000000000000043900000521fc0200000007fb0000000a0049006d006100670065010000003d000000db0000002800fffffffb0000000c00430061006d006500720061010000011e0000026e0000002800fffffffb000000100044006900730070006c0061007900730100000392000001cc000000c900fffffffb0000001200530065006c0065006300740069006f006e00000003b70000005c0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007300000004e30000007b0000005c00fffffffb0000000a0056006900650077007300000004a3000000bb000000a400fffffffb0000000800540069006d006500000005200000003e0000003900ffffff000005c10000052100000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Selection:
+    collapsed: false
+  Time:
+    collapsed: false
+  Tool Properties:
+    collapsed: false
+  Views:
+    collapsed: false
+  Width: 2560
+  X: 0
+  Y: 0

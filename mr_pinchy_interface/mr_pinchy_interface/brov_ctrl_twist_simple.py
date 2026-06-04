@@ -65,7 +65,7 @@ class BrovTwistSimpleController(Node):
         self._kff = np.array([1.0 / 0.3, 1.0 / 0.25, 1.0 / 0.3, 1.0 / 0.65], dtype=float)
 
         # Tank safety bounds: [[x_min, y_min, z_min], [x_max, y_max, z_max]]
-        self._tank_range = np.array([[1.0, -1.8, 0.5], [6.0, 1.8, 3.0]])
+        self._tank_range = np.array([[1.0, -1.8, 0.3], [6.0, 1.8, 3.0]])
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self._mc_pub = self.create_publisher(ManualControl, mc_topic, qos)

@@ -105,6 +105,13 @@ def base_link_z_axis_angle_rad(q):
     return float(math.acos(dot))
 
 
+def base_link_x_axis_angle_rad(q):
+    rotation = quat_to_rotation_matrix(q)
+    base_link_x_in_mocap = rotation[:, 0]
+    dot = float(np.clip(base_link_x_in_mocap[0], -1.0, 1.0))
+    return float(math.acos(dot))
+
+
 class QuaternionCvEkf:
     def __init__(
         self,
@@ -117,6 +124,7 @@ class QuaternionCvEkf:
         max_position_innovation_m=0.25,
         max_orientation_innovation_rad=0.75,
         max_base_link_z_axis_angle_rad=0.4,
+        max_base_link_x_axis_angle_rad=math.pi / 3.0,
         max_gyro_innovation_rad_s=2.0,
         max_dvl_innovation_m_s=1.5,
     ):
@@ -129,6 +137,7 @@ class QuaternionCvEkf:
         self.max_position_innovation_m = max_position_innovation_m
         self.max_orientation_innovation_rad = max_orientation_innovation_rad
         self.max_base_link_z_axis_angle_rad = max_base_link_z_axis_angle_rad
+        self.max_base_link_x_axis_angle_rad = max_base_link_x_axis_angle_rad
         self.max_gyro_innovation_rad_s = max_gyro_innovation_rad_s
         self.max_dvl_innovation_m_s = max_dvl_innovation_m_s
         self.position = np.zeros(3, dtype=float)
@@ -272,9 +281,15 @@ class QuaternionCvEkf:
             z_axis_angle_rad,
             self.max_base_link_z_axis_angle_rad,
         )
+        x_axis_angle_rad = base_link_x_axis_angle_rad(orientation_meas)
+        x_axis_accepted = self._within_gate(
+            x_axis_angle_rad,
+            self.max_base_link_x_axis_angle_rad,
+        )
+        axis_accepted = z_axis_accepted and x_axis_accepted
 
         if not self.initialized:
-            return z_axis_accepted, z_axis_accepted, np.zeros(3, dtype=float), np.zeros(3, dtype=float)
+            return axis_accepted, axis_accepted, np.zeros(3, dtype=float), np.zeros(3, dtype=float)
 
         position_meas = np.asarray(position_meas, dtype=float)
         position_residual = position_meas - self.position
@@ -294,8 +309,25 @@ class QuaternionCvEkf:
             self.max_orientation_innovation_rad,
         )
 
-        orientation_accepted = orientation_accepted and z_axis_accepted
+        orientation_accepted = orientation_accepted and axis_accepted
         return position_accepted, orientation_accepted, position_residual, orientation_residual_vec
+
+    def orientation_meas_safe(self, orientation_meas):
+        """Whether a candidate mocap orientation is sane on its own.
+
+        Used to decide if a measurement is trustworthy enough to reset the
+        filter from, independent of the (possibly drifted) current state.
+        """
+        orientation_meas = quat_normalize(orientation_meas)
+        z_axis_angle_rad = base_link_z_axis_angle_rad(orientation_meas)
+        x_axis_angle_rad = base_link_x_axis_angle_rad(orientation_meas)
+        return self._within_gate(
+            z_axis_angle_rad,
+            self.max_base_link_z_axis_angle_rad,
+        ) and self._within_gate(
+            x_axis_angle_rad,
+            self.max_base_link_x_axis_angle_rad,
+        )
 
     def reset_copy(self):
         return QuaternionCvEkf(
@@ -308,6 +340,7 @@ class QuaternionCvEkf:
             max_position_innovation_m=self.max_position_innovation_m,
             max_orientation_innovation_rad=self.max_orientation_innovation_rad,
             max_base_link_z_axis_angle_rad=self.max_base_link_z_axis_angle_rad,
+            max_base_link_x_axis_angle_rad=self.max_base_link_x_axis_angle_rad,
             max_gyro_innovation_rad_s=self.max_gyro_innovation_rad_s,
             max_dvl_innovation_m_s=self.max_dvl_innovation_m_s,
         )
@@ -467,6 +500,8 @@ class BrovEKFOdom(Node):
         self.declare_parameter("use_imu_gyro", True)
         self.declare_parameter("dvl_topic", "/dvl/velocity")
         self.declare_parameter("use_dvl", True)
+        self.declare_parameter("mocap_reset_timeout_sec", 5.0)
+        self.declare_parameter("sensor_timeout_sec", 1.0)
 
         self._pose_topic = str(self.get_parameter("pose_topic").value)
         self._odom_topic = str(self.get_parameter("odom_topic").value)
@@ -479,11 +514,20 @@ class BrovEKFOdom(Node):
         self._use_imu_gyro = bool(self.get_parameter("use_imu_gyro").value)
         self._dvl_topic = str(self.get_parameter("dvl_topic").value)
         self._use_dvl = bool(self.get_parameter("use_dvl").value)
+        self._mocap_reset_timeout_sec = float(
+            self.get_parameter("mocap_reset_timeout_sec").value
+        )
+        self._sensor_timeout_sec = float(
+            self.get_parameter("sensor_timeout_sec").value
+        )
 
         self._filter = QuaternionCvEkf()
         self._last_filter_sec = None
         self._last_pose_rx_sec = None
+        self._last_pose_accepted_sec = None
+        self._last_sensor_accepted_sec = None
         self._consecutive_full_rejections = 0
+        self._publishing_paused = False
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self._odom_pub = self.create_publisher(Odometry, self._odom_topic, qos)
@@ -511,10 +555,13 @@ class BrovEKFOdom(Node):
             f"max_position_innovation={self._filter.max_position_innovation_m:.3f}m, "
             f"max_orientation_innovation={self._filter.max_orientation_innovation_rad:.3f}rad, "
             f"max_base_link_z_axis_angle={self._filter.max_base_link_z_axis_angle_rad:.3f}rad, "
+            f"max_base_link_x_axis_angle={self._filter.max_base_link_x_axis_angle_rad:.3f}rad, "
             f"gyro_std={self._filter.gyro_std:.3f}rad/s, "
             f"max_gyro_innovation={self._filter.max_gyro_innovation_rad_s:.3f}rad/s, "
             f"dvl_std={self._filter.dvl_std:.3f}m/s, "
             f"max_dvl_innovation={self._filter.max_dvl_innovation_m_s:.3f}m/s, "
+            f"mocap_reset_timeout={self._mocap_reset_timeout_sec:.2f}s, "
+            f"sensor_timeout={self._sensor_timeout_sec:.2f}s, "
         )
     
     def _now_sec(self) -> float:
@@ -587,11 +634,18 @@ class BrovEKFOdom(Node):
             position,
             orientation,
         )
-        if not accepted:
+        if accepted:
+            self._last_pose_accepted_sec = now
+            self._last_sensor_accepted_sec = now
+        else:
             self.get_logger().warn(
                 "Mocap measurement rejected.",
                 throttle_duration_sec=1.0,
             )
+            if self._should_reset_from_mocap(now) and self._filter.orientation_meas_safe(
+                orientation
+            ):
+                self._reset_filter_from_mocap(position, orientation, now)
 
         if self._last_filter_sec is None:
             self._last_filter_sec = now
@@ -603,6 +657,26 @@ class BrovEKFOdom(Node):
                 f"Received pose in frame '{frame_id}', publishing odom in '{self._parent_frame}'.",
                 throttle_duration_sec=2.0,
             )
+
+    def _should_reset_from_mocap(self, now) -> bool:
+        if self._mocap_reset_timeout_sec <= 0.0:
+            return False
+        if not self._filter.initialized or self._last_pose_accepted_sec is None:
+            return False
+        return (now - self._last_pose_accepted_sec) > self._mocap_reset_timeout_sec
+
+    def _reset_filter_from_mocap(self, position, orientation, now) -> None:
+        elapsed = now - self._last_pose_accepted_sec
+        self._filter = self._filter.reset_copy()
+        self._filter.initialize(position, orientation)
+        self._last_pose_accepted_sec = now
+        self._last_sensor_accepted_sec = now
+        self._last_filter_sec = now
+        self._imu_gyro_lpf = None
+        self.get_logger().warn(
+            f"No mocap measurement accepted for {elapsed:.2f}s; "
+            "reset EKF from fresh mocap measurement.",
+        )
 
     def _imu_cb(self, msg):
         if not self._use_imu_gyro or not self._filter.initialized:
@@ -627,7 +701,9 @@ class BrovEKFOdom(Node):
         self._imu_gyro_lpf = filtered_angular_velocity
 
         accepted = self._filter.update_body_angular_velocity(filtered_angular_velocity)
-        if not accepted:
+        if accepted:
+            self._last_sensor_accepted_sec = self._now_sec()
+        else:
             self.get_logger().warn(
                 "Rejected IMU gyro outlier: "
                 f"max_gyro_innovation={self._filter.max_gyro_innovation_rad_s:.3f}rad/s",
@@ -647,17 +723,46 @@ class BrovEKFOdom(Node):
             dtype=float,
         )
         accepted = self._filter.update_body_linear_velocity(linear_velocity_body)
-        if not accepted:
+        if accepted:
+            self._last_sensor_accepted_sec = self._now_sec()
+        else:
             self.get_logger().warn(
                 "Rejected DVL velocity outlier: "
                 f"max_dvl_innovation={self._filter.max_dvl_innovation_m_s:.3f}m/s",
                 throttle_duration_sec=1.0,
             )
 
+    def _sensors_timed_out(self, now) -> bool:
+        if self._sensor_timeout_sec <= 0.0:
+            return False
+        if self._last_sensor_accepted_sec is None:
+            return True
+        return (now - self._last_sensor_accepted_sec) > self._sensor_timeout_sec
+
     def _tick(self):
         if not self._filter.initialized or self._last_pose_rx_sec is None:
             return
         now = self._now_sec()
+
+        if self._sensors_timed_out(now):
+            elapsed = (
+                now - self._last_sensor_accepted_sec
+                if self._last_sensor_accepted_sec is not None
+                else float("inf")
+            )
+            self.get_logger().warn(
+                f"No sensor measurement accepted for {elapsed:.2f}s "
+                f"(> {self._sensor_timeout_sec:.2f}s); pausing odom/tf publishing.",
+                throttle_duration_sec=1.0,
+            )
+            self._publishing_paused = True
+            self._last_filter_sec = now
+            return
+
+        if self._publishing_paused:
+            self.get_logger().info("Sensor measurements resumed; publishing odom/tf.")
+            self._publishing_paused = False
+
         dt = now - self._last_filter_sec if self._last_filter_sec is not None else 0.0
         self._filter.predict(dt)
         self._last_filter_sec = now
