@@ -187,8 +187,8 @@ TRAJ_THICK  = 6.0
 ARROW_COLOR = (1.0, 0.333, 0.333)                 # dark, same for all arrows
 # yellow-ish ramp with strong contrast: deep amber = no modification ->
 # near-white pale yellow = max modification
-HEAT_LOW    = (0.0, 0.6, 0.45)                      # normal trajectory (teal-green)
-HEAT_HIGH   = (1.0, 0.78, 0.0)                      # max modification (yellow #ffff00)
+HEAT_LOW    = (0.0, 0.0, 0.0)                      # normal trajectory (teal-green)
+HEAT_HIGH   = (1.0, 1.0, 0.0)                      # max modification (yellow #ffff00)
 HEAT_GAMMA  = 0.6                                       # <1 spreads the clustered low values
 
 
