@@ -8,19 +8,23 @@ controller (brov_ctrl_twist_simple).
 
 Model — deliberately *not* the hydrodynamic model. The inner velocity PID hides
 all the hydrodynamics, so the MPC only needs a kinematic integrator in the odom
-(world) frame:
+(world) frame. Depth is left to a separate controller; this node tracks the
+horizontal plane and heading only:
 
-    eta = [x, y, z, psi]            (position + yaw, odom frame)
-    u   = [vx, vy, vz, omega]       (commanded velocity, odom frame)
+    eta = [x, y, psi]              (horizontal position + yaw, odom frame)
+    u   = [vx, vy, omega]          (commanded velocity, odom frame)
     eta_{k+1} = eta_k + dt * u_k
 
-Because the command and the error both live in the odom frame, this is
-convention-agnostic (FRD/FLU, ENU/NED): the inner loop's TF turns the odom-frame
-twist into the body frame, exactly as the previous P controller relied on. The
-resulting problem is a convex QP solved with OSQP every tick.
+The emitted twist therefore leaves linear.z at zero. Because the command and the
+error both live in the odom frame, this is convention-agnostic (FRD/FLU,
+ENU/NED): the inner loop's TF turns the odom-frame twist into the body frame,
+exactly as the previous P controller relied on. The resulting problem is a
+convex QP, modeled once in CVXPY (DPP-parametrized) and re-solved with OSQP
+every tick via warm starting.
 """
 from __future__ import annotations
 
+import cvxpy as cp
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped, TwistStamped
@@ -30,12 +34,6 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from tf2_geometry_msgs import do_transform_pose_stamped
 from tf2_ros import Buffer, TransformException, TransformListener
-
-from pydrake.solvers import (
-    MathematicalProgram,
-    OsqpSolver,
-    SolverOptions,
-)
 
 from mr_pinchy_interface.brov_utils import (
     quat_to_rpy,
@@ -53,17 +51,19 @@ class BrovWaypointMpcController(Node):
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_ekf")
         self.declare_parameter("base_link_frame", "mr_pinchy/base_link_ekf_flu")
         self.declare_parameter("map_frame", "map")
-        self.declare_parameter("cmd_topic", "/mr_pinchy/cmd_vel_ref")
+        self.declare_parameter("cmd_topic", "/mr_pinchy/cmd_vel")
         self.declare_parameter("predicted_path_topic", "~/mpc_predicted_path")
 
         # --- MPC horizon / rate ---
         self.declare_parameter("horizon", 20)        # steps
         self.declare_parameter("mpc_dt", 0.2)        # s per step -> 4 s lookahead
-        self.declare_parameter("publish_rate_hz", 20.0)
+        # Control (re-solve + publish) frequency; independent of mpc_dt. Warm-
+        # started solves measure ~9ms mean / ~24ms worst, so 30 Hz leaves margin.
+        self.declare_parameter("publish_rate_hz", 30.0)
         self.declare_parameter("odom_timeout", 0.3)
 
         # --- limits (odom frame; isotropic horizontal, matches old P node) ---
-        self.declare_parameter("v_lin_max", 0.15)    # m/s on x, y, z
+        self.declare_parameter("v_lin_max", 0.15)    # m/s on x, y
         self.declare_parameter("v_yaw_max", 0.3)     # rad/s
         self.declare_parameter("a_lin_max", 0.2)     # m/s^2
         self.declare_parameter("a_yaw_max", 0.5)     # rad/s^2
@@ -78,19 +78,12 @@ class BrovWaypointMpcController(Node):
         self.declare_parameter("rd_v", 5.0)          # linear rate (smoothness)
         self.declare_parameter("rd_w", 5.0)          # yaw rate
 
-        # --- goal depth override (preserves previous behavior) ---
-        # NOTE: the previous node hard-set goal z = -1.2. RViz "2D Goal Pose"
-        # has no z, so a fixed depth is needed. Kept as a parameter.
-        self.declare_parameter("use_fixed_goal_z", True)
-        self.declare_parameter("fixed_goal_z", -1.2)
-
         # --- tank soft constraints (DISABLED by default) ---
-        # See the brov_ctrl_twist_simple tank range. The sign of the Z bound vs.
-        # fixed_goal_z is inconsistent across the two nodes, so confirm the odom
-        # Z convention before enabling these.
+        # Horizontal (x, y) bounds only; see the brov_ctrl_twist_simple tank
+        # range. Slack keeps the QP always feasible.
         self.declare_parameter("enable_tank_constraint", False)
-        self.declare_parameter("tank_min", [1.0, -1.8, 0.3])
-        self.declare_parameter("tank_max", [6.0, 1.8, 3.0])
+        self.declare_parameter("tank_min", [1.0, -1.8])
+        self.declare_parameter("tank_max", [6.0, 1.8])
         self.declare_parameter("tank_margin", 0.2)
         self.declare_parameter("tank_slack_weight", 1000.0)
 
@@ -112,13 +105,13 @@ class BrovWaypointMpcController(Node):
         self._a_lin_max = float(gp("a_lin_max").value)
         self._a_yaw_max = float(gp("a_yaw_max").value)
 
-        self._Q = np.diag([gp("q_pos").value] * 3 + [gp("q_yaw").value]).astype(float)
-        self._Qf = np.diag([gp("qf_pos").value] * 3 + [gp("qf_yaw").value]).astype(float)
-        self._R = np.diag([gp("r_v").value] * 3 + [gp("r_w").value]).astype(float)
-        self._Rd = np.diag([gp("rd_v").value] * 3 + [gp("rd_w").value]).astype(float)
-
-        self._use_fixed_goal_z = bool(gp("use_fixed_goal_z").value)
-        self._fixed_goal_z = float(gp("fixed_goal_z").value)
+        # Weights stored as their (diagonal) matrix square roots, so the cost can
+        # be written with cp.sum_squares -- the DPP-friendly form that lets CVXPY
+        # canonicalize the QP once and only swap parameter values each tick.
+        self._Qh = np.sqrt(np.diag([gp("q_pos").value] * 2 + [gp("q_yaw").value]))
+        self._Qfh = np.sqrt(np.diag([gp("qf_pos").value] * 2 + [gp("qf_yaw").value]))
+        self._Rh = np.sqrt(np.diag([gp("r_v").value] * 2 + [gp("r_w").value]))
+        self._Rdh = np.sqrt(np.diag([gp("rd_v").value] * 2 + [gp("rd_w").value]))
 
         self._enable_tank = bool(gp("enable_tank_constraint").value)
         self._tank_min = np.asarray(gp("tank_min").value, dtype=float)
@@ -126,21 +119,18 @@ class BrovWaypointMpcController(Node):
         self._tank_margin = float(gp("tank_margin").value)
         self._tank_w = float(gp("tank_slack_weight").value)
 
-        # Control bounds in [vx, vy, vz, omega] order.
+        # Control bounds in [vx, vy, omega] order.
         self._u_lo = np.array(
-            [-self._v_lin_max, -self._v_lin_max, -self._v_lin_max, -self._v_yaw_max]
+            [-self._v_lin_max, -self._v_lin_max, -self._v_yaw_max]
         )
         self._u_hi = -self._u_lo
         # Per-step acceleration bound on |u_k - u_{k-1}|.
         self._du = np.array(
-            [self._a_lin_max, self._a_lin_max, self._a_lin_max, self._a_yaw_max]
+            [self._a_lin_max, self._a_lin_max, self._a_yaw_max]
         ) * self._dt
 
-        # --- solver ---
-        self._solver = OsqpSolver()
-        self._solver_opts = SolverOptions()
-        self._solver_opts.SetOption(OsqpSolver.id(), "max_iter", 4000)
-        self._solver_opts.SetOption(OsqpSolver.id(), "verbose", 0)
+        # --- solver: build the parametrized QP once, re-solve every tick ---
+        self._build_problem()
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self._cmd_pub = self.create_publisher(TwistStamped, cmd_topic, qos)
@@ -156,10 +146,8 @@ class BrovWaypointMpcController(Node):
         self._last_odom: Odometry | None = None
         self._last_odom_rx_sec: float = 0.0
 
-        # Warm-start / accel-continuity state.
-        self._u_prev = np.zeros(4, dtype=float)
-        self._x_guess: np.ndarray | None = None
-        self._u_guess: np.ndarray | None = None
+        # Accel-continuity state (also seeds the OSQP warm start each tick).
+        self._u_prev = np.zeros(3, dtype=float)
 
         self.create_timer(1.0 / self._publish_rate_hz, self._tick)
         self.get_logger().info(
@@ -171,15 +159,10 @@ class BrovWaypointMpcController(Node):
     # ------------------------------------------------------------------ I/O
     def _goal_cb(self, msg: PoseStamped) -> None:
         self._goal_pose = msg
-        if self._use_fixed_goal_z:
-            self._goal_pose.pose.position.z = self._fixed_goal_z
         self._goal_in_odom = None
-        self._x_guess = None
-        self._u_guess = None
         self.get_logger().info(
             f"New goal: frame='{msg.header.frame_id}', "
-            f"pos=({msg.pose.position.x:.3f}, {msg.pose.position.y:.3f}, "
-            f"{self._goal_pose.pose.position.z:.3f})"
+            f"pos=({msg.pose.position.x:.3f}, {msg.pose.position.y:.3f})"
         )
 
     def _odom_cb(self, msg: Odometry) -> None:
@@ -225,77 +208,76 @@ class BrovWaypointMpcController(Node):
         twist.header.stamp = self.get_clock().now().to_msg()
         twist.header.frame_id = self._base_link_frame
         self._cmd_pub.publish(twist)
-        self._u_prev = np.zeros(4, dtype=float)
-        self._x_guess = None
-        self._u_guess = None
+        self._u_prev = np.zeros(3, dtype=float)
 
     # ------------------------------------------------------------------ MPC
-    def _solve_mpc(
-        self, x0: np.ndarray, goal: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray] | None:
-        """Return (u0, predicted_states) or None on solver failure."""
+    def _build_problem(self) -> None:
+        """Build the parametrized QP once. Only x0/goal/u_prev change per tick,
+        so CVXPY canonicalizes a single time (DPP) and re-solves with OSQP."""
         N, dt = self._N, self._dt
-        prog = MathematicalProgram()
-        X = prog.NewContinuousVariables(N + 1, 4, "x")
-        U = prog.NewContinuousVariables(N, 4, "u")
 
-        # Initial condition.
-        prog.AddLinearEqualityConstraint(X[0], x0)
+        self._X = cp.Variable((N + 1, 3), name="x")
+        self._U = cp.Variable((N, 3), name="u")
+        self._p_x0 = cp.Parameter(3, name="x0")
+        self._p_goal = cp.Parameter(3, name="goal")
+        self._p_uprev = cp.Parameter(3, name="u_prev")
+
+        X, U = self._X, self._U
+        cost = 0
+        cons = [X[0] == self._p_x0]  # initial condition
 
         for k in range(N):
             # Kinematic integrator: x_{k+1} = x_k + dt * u_k.
-            prog.AddLinearEqualityConstraint(
-                X[k + 1] - X[k] - dt * U[k], np.zeros(4)
-            )
+            cons.append(X[k + 1] == X[k] + dt * U[k])
             # Velocity box.
-            prog.AddBoundingBoxConstraint(self._u_lo, self._u_hi, U[k])
+            cons += [U[k] >= self._u_lo, U[k] <= self._u_hi]
             # Acceleration box on |u_k - u_{k-1}|.
-            if k == 0:
-                prog.AddBoundingBoxConstraint(
-                    self._u_prev - self._du, self._u_prev + self._du, U[0]
-                )
-            else:
-                prog.AddLinearConstraint(U[k] - U[k - 1], -self._du, self._du)
+            u_prev = U[k - 1] if k > 0 else self._p_uprev
+            cons += [U[k] - u_prev >= -self._du, U[k] - u_prev <= self._du]
             # Effort + rate cost.
-            prog.AddQuadraticErrorCost(self._R, np.zeros(4), U[k])
-            du = U[k] - (U[k - 1] if k > 0 else self._u_prev)
-            prog.AddQuadraticCost(du @ self._Rd @ du, is_convex=True)
+            cost += cp.sum_squares(self._Rh @ U[k])
+            cost += cp.sum_squares(self._Rdh @ (U[k] - u_prev))
             # Stage tracking cost on X[1..N].
-            prog.AddQuadraticErrorCost(self._Q, goal, X[k + 1])
+            cost += cp.sum_squares(self._Qh @ (X[k + 1] - self._p_goal))
 
         # Extra terminal weight on X[N] (on top of the stage cost above).
-        prog.AddQuadraticErrorCost(self._Qf, goal, X[N])
+        cost += cp.sum_squares(self._Qfh @ (X[N] - self._p_goal))
 
         # Optional soft tank bounds (slack keeps the QP always feasible).
         if self._enable_tank:
             tmin = self._tank_min + self._tank_margin
             tmax = self._tank_max - self._tank_margin
-            s = prog.NewContinuousVariables(N, 6, "tank_slack")
-            sv = s.reshape(-1)
-            prog.AddBoundingBoxConstraint(np.zeros(sv.size), np.full(sv.size, np.inf), sv)
+            S = cp.Variable((N, 4), nonneg=True, name="tank_slack")
             for k in range(1, N + 1):
-                for i in range(3):
-                    prog.AddLinearConstraint(X[k][i] + s[k - 1, i] >= tmin[i])
-                    prog.AddLinearConstraint(X[k][i] - s[k - 1, 3 + i] <= tmax[i])
-            prog.AddQuadraticCost(self._tank_w * (sv @ sv), is_convex=True)
+                for i in range(2):
+                    cons.append(X[k][i] + S[k - 1, i] >= tmin[i])
+                    cons.append(X[k][i] - S[k - 1, 2 + i] <= tmax[i])
+            cost += self._tank_w * cp.sum_squares(S)
 
-        # Warm start from previous (shifted) solution.
-        if self._x_guess is not None and self._u_guess is not None:
-            prog.SetInitialGuess(X, self._x_guess)
-            prog.SetInitialGuess(U, self._u_guess)
+        self._problem = cp.Problem(cp.Minimize(cost), cons)
 
-        result = self._solver.Solve(prog, None, self._solver_opts)
-        if not result.is_success():
+    def _solve_mpc(
+        self, x0: np.ndarray, goal: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """Return (u0, predicted_states) or None on solver failure."""
+        self._p_x0.value = x0
+        self._p_goal.value = goal
+        self._p_uprev.value = self._u_prev
+
+        try:
+            self._problem.solve(
+                solver=cp.OSQP, warm_start=True, max_iter=4000, verbose=False
+            )
+        except cp.error.SolverError:
             return None
 
-        X_sol = result.GetSolution(X)
-        U_sol = result.GetSolution(U)
-        # Shift for next warm start.
-        self._x_guess = np.vstack([X_sol[1:], X_sol[-1]])
-        self._u_guess = np.vstack([U_sol[1:], U_sol[-1]])
-        return U_sol[0], X_sol
+        if self._U.value is None or self._X.value is None:
+            return None
+        return self._U.value[0], self._X.value
 
-    def _publish_predicted_path(self, X_sol: np.ndarray, frame_id: str) -> None:
+    def _publish_predicted_path(
+        self, X_sol: np.ndarray, frame_id: str, z: float
+    ) -> None:
         if self._path_pub.get_subscription_count() == 0:
             return
         path = Path()
@@ -306,8 +288,8 @@ class BrovWaypointMpcController(Node):
             ps.header.frame_id = frame_id
             ps.pose.position.x = float(state[0])
             ps.pose.position.y = float(state[1])
-            ps.pose.position.z = float(state[2])
-            qx, qy, qz, qw = rpy_to_quat(0.0, 0.0, float(state[3]))
+            ps.pose.position.z = z
+            qx, qy, qz, qw = rpy_to_quat(0.0, 0.0, float(state[2]))
             ps.pose.orientation.x = qx
             ps.pose.orientation.y = qy
             ps.pose.orientation.z = qz
@@ -351,10 +333,8 @@ class BrovWaypointMpcController(Node):
         # model never "winds up" the long way around.
         goal_yaw = cur_yaw + wrap_pi(goal_yaw - cur_yaw)
 
-        x0 = np.array(
-            [odom_pose.position.x, odom_pose.position.y, odom_pose.position.z, cur_yaw]
-        )
-        goal_vec = np.array([goal.position.x, goal.position.y, goal.position.z, goal_yaw])
+        x0 = np.array([odom_pose.position.x, odom_pose.position.y, cur_yaw])
+        goal_vec = np.array([goal.position.x, goal.position.y, goal_yaw])
 
         solution = self._solve_mpc(x0, goal_vec)
         if solution is None:
@@ -371,11 +351,10 @@ class BrovWaypointMpcController(Node):
         twist.header.frame_id = odom_frame  # odom-frame velocity, like the old node
         twist.twist.linear.x = float(u0[0])
         twist.twist.linear.y = float(u0[1])
-        twist.twist.linear.z = float(u0[2])
-        twist.twist.angular.z = float(u0[3])
+        twist.twist.angular.z = float(u0[2])
         self._cmd_pub.publish(twist)
 
-        self._publish_predicted_path(X_sol, odom_frame)
+        self._publish_predicted_path(X_sol, odom_frame, odom_pose.position.z)
 
 
 def main(args=None) -> None:

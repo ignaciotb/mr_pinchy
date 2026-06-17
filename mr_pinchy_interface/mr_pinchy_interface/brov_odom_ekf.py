@@ -9,6 +9,7 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu
+from std_msgs.msg import Float64
 from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster
 
 
@@ -121,12 +122,15 @@ class QuaternionCvEkf:
         angular_accel_std=1.0,
         gyro_std=0.05,
         dvl_std=0.1,
+        depth_std=0.1,
         max_position_innovation_m=0.25,
         max_orientation_innovation_rad=0.75,
         max_base_link_z_axis_angle_rad=0.4,
         max_base_link_x_axis_angle_rad=math.pi / 3.0,
         max_gyro_innovation_rad_s=2.0,
         max_dvl_innovation_m_s=1.5,
+        max_depth_innovation_m=1.0,
+        roll_prior_std=0.1,
     ):
         self.position_std = position_std
         self.orientation_std = orientation_std
@@ -134,12 +138,15 @@ class QuaternionCvEkf:
         self.angular_accel_std = angular_accel_std
         self.gyro_std = gyro_std
         self.dvl_std = dvl_std
+        self.depth_std = depth_std
+        self.roll_prior_std = roll_prior_std
         self.max_position_innovation_m = max_position_innovation_m
         self.max_orientation_innovation_rad = max_orientation_innovation_rad
         self.max_base_link_z_axis_angle_rad = max_base_link_z_axis_angle_rad
         self.max_base_link_x_axis_angle_rad = max_base_link_x_axis_angle_rad
         self.max_gyro_innovation_rad_s = max_gyro_innovation_rad_s
         self.max_dvl_innovation_m_s = max_dvl_innovation_m_s
+        self.max_depth_innovation_m = max_depth_innovation_m
         self.position = np.zeros(3, dtype=float)
         self.linear_velocity = np.zeros(3, dtype=float)
         self.orientation = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
@@ -337,12 +344,15 @@ class QuaternionCvEkf:
             angular_accel_std=self.angular_accel_std,
             gyro_std=self.gyro_std,
             dvl_std=self.dvl_std,
+            depth_std=self.depth_std,
+            roll_prior_std=self.roll_prior_std,
             max_position_innovation_m=self.max_position_innovation_m,
             max_orientation_innovation_rad=self.max_orientation_innovation_rad,
             max_base_link_z_axis_angle_rad=self.max_base_link_z_axis_angle_rad,
             max_base_link_x_axis_angle_rad=self.max_base_link_x_axis_angle_rad,
             max_gyro_innovation_rad_s=self.max_gyro_innovation_rad_s,
             max_dvl_innovation_m_s=self.max_dvl_innovation_m_s,
+            max_depth_innovation_m=self.max_depth_innovation_m,
         )
 
     def update_body_angular_velocity(
@@ -449,6 +459,97 @@ class QuaternionCvEkf:
             return False
         return True
 
+    def update_depth(self, z_meas):
+        """1-D update of world-frame z (depth) from an absolute depth sensor.
+
+        ``z_meas`` must already be expressed in the filter's world frame (same
+        convention/units as mocap z), i.e. any sensor offset/scale has been
+        applied by the caller.
+        """
+        if not self.initialized or self.depth_std is None or self.depth_std <= 0.0:
+            return False
+
+        residual_scalar = float(z_meas) - float(self.position[2])
+        innovation_m = abs(residual_scalar)
+        if not self._within_gate(innovation_m, self.max_depth_innovation_m):
+            return False
+
+        snap = self._snapshot()
+
+        residual = np.array([residual_scalar], dtype=float)
+        h = np.zeros((1, 12), dtype=float)
+        h[0, 2] = 1.0
+        r = np.array([[self.depth_std**2]], dtype=float)
+
+        pht = self.covariance @ h.T
+        s = h @ pht + r
+        kalman_gain = pht @ np.linalg.inv(s)
+        correction = kalman_gain @ residual
+
+        self.position = self.position + correction[0:3]
+        self.linear_velocity = self.linear_velocity + correction[3:6]
+        self.orientation = quat_normalize(
+            quat_multiply(quat_exp(correction[6:9]), self.orientation)
+        )
+        self.angular_velocity = self.angular_velocity + correction[9:12]
+
+        identity = np.eye(12, dtype=float)
+        ikh = identity - kalman_gain @ h
+        self.covariance = ikh @ self.covariance @ ikh.T + kalman_gain @ r @ kalman_gain.T
+        self.covariance = 0.5 * (self.covariance + self.covariance.T)
+
+        if not self._orientation_z_safe():
+            self._restore(snap)
+            return False
+        return True
+
+    def update_zero_roll_prior(self, roll_prior_std=None):
+        """Soft prior that roll (rotation about body x-axis) is ~0.
+
+        Applied as a recurring pseudo-measurement: the z-component of the body
+        y-axis expressed in world equals cos(pitch)*sin(roll), which is driven
+        toward 0. A smaller ``roll_prior_std`` makes the prior stronger; values
+        <= 0 (or None) disable it.
+        """
+        if roll_prior_std is None:
+            roll_prior_std = self.roll_prior_std
+        if not self.initialized or roll_prior_std is None or roll_prior_std <= 0.0:
+            return False
+
+        rotation = quat_to_rotation_matrix(self.orientation)
+        body_y_in_world = rotation[:, 1]
+        # h(x) = z-component of body y-axis = cos(pitch)*sin(roll); target is 0.
+        residual = np.array([0.0 - body_y_in_world[2]], dtype=float)
+
+        h = np.zeros((1, 12), dtype=float)
+        # d(e_z^T R e_y)/d(delta_theta_world) = (R e_y) x e_z
+        h[0, 6:9] = np.cross(body_y_in_world, np.array([0.0, 0.0, 1.0]))
+        r = np.array([[roll_prior_std**2]], dtype=float)
+
+        snap = self._snapshot()
+
+        pht = self.covariance @ h.T
+        s = h @ pht + r
+        kalman_gain = pht @ np.linalg.inv(s)
+        correction = kalman_gain @ residual
+
+        self.position = self.position + correction[0:3]
+        self.linear_velocity = self.linear_velocity + correction[3:6]
+        self.orientation = quat_normalize(
+            quat_multiply(quat_exp(correction[6:9]), self.orientation)
+        )
+        self.angular_velocity = self.angular_velocity + correction[9:12]
+
+        identity = np.eye(12, dtype=float)
+        ikh = identity - kalman_gain @ h
+        self.covariance = ikh @ self.covariance @ ikh.T + kalman_gain @ r @ kalman_gain.T
+        self.covariance = 0.5 * (self.covariance + self.covariance.T)
+
+        if not self._orientation_z_safe():
+            self._restore(snap)
+            return False
+        return True
+
     def _snapshot(self):
         return (
             self.position.copy(),
@@ -502,6 +603,18 @@ class BrovEKFOdom(Node):
         self.declare_parameter("use_dvl", True)
         self.declare_parameter("mocap_reset_timeout_sec", 5.0)
         self.declare_parameter("sensor_timeout_sec", 1.0)
+        self.declare_parameter("roll_prior_std", 0.1)
+        self.declare_parameter("use_rel_alt", True)
+        self.declare_parameter("rel_alt_topic", "/mavros/global_position/rel_alt")
+        self.declare_parameter("rel_alt_std", 0.1)
+        self.declare_parameter("max_rel_alt_innovation_m", 1.0)
+        # World z = rel_alt_scale * rel_alt + rel_alt_offset. Scale -1 because
+        # mocap/world z is positive-down (deeper = larger z) while rel_alt is
+        # positive-up (deeper = more negative), so they move oppositely.
+        # rel_alt_offset is auto-calibrated from accepted mocap when set to NaN;
+        # provide a finite value to pin it manually.
+        self.declare_parameter("rel_alt_scale", -1.0)
+        self.declare_parameter("rel_alt_offset", float("nan"))
 
         self._pose_topic = str(self.get_parameter("pose_topic").value)
         self._odom_topic = str(self.get_parameter("odom_topic").value)
@@ -520,8 +633,26 @@ class BrovEKFOdom(Node):
         self._sensor_timeout_sec = float(
             self.get_parameter("sensor_timeout_sec").value
         )
+        self._roll_prior_std = float(self.get_parameter("roll_prior_std").value)
+        self._use_rel_alt = bool(self.get_parameter("use_rel_alt").value)
+        self._rel_alt_topic = str(self.get_parameter("rel_alt_topic").value)
+        self._rel_alt_std = float(self.get_parameter("rel_alt_std").value)
+        self._max_rel_alt_innovation_m = float(
+            self.get_parameter("max_rel_alt_innovation_m").value
+        )
+        self._rel_alt_scale = float(self.get_parameter("rel_alt_scale").value)
+        rel_alt_offset_param = float(self.get_parameter("rel_alt_offset").value)
+        self._rel_alt_offset_auto = math.isnan(rel_alt_offset_param)
+        self._rel_alt_offset = None if self._rel_alt_offset_auto else rel_alt_offset_param
+        self._rel_alt_offset_lpf_alpha = 0.02
+        self._latest_rel_alt = None
+        self._latest_rel_alt_sec = None
 
-        self._filter = QuaternionCvEkf()
+        self._filter = QuaternionCvEkf(
+            depth_std=self._rel_alt_std,
+            max_depth_innovation_m=self._max_rel_alt_innovation_m,
+            roll_prior_std=self._roll_prior_std,
+        )
         self._last_filter_sec = None
         self._last_pose_rx_sec = None
         self._last_pose_accepted_sec = None
@@ -537,6 +668,10 @@ class BrovEKFOdom(Node):
         if self._use_dvl:
             self.create_subscription(
                 TwistWithCovarianceStamped, self._dvl_topic, self._dvl_cb, qos,
+            )
+        if self._use_rel_alt:
+            self.create_subscription(
+                Float64, self._rel_alt_topic, self._rel_alt_cb, qos,
             )
         self._tf_broadcaster = TransformBroadcaster(self) if self._publish_tf else None
         self._static_tf_broadcaster = StaticTransformBroadcaster(self)
@@ -562,6 +697,12 @@ class BrovEKFOdom(Node):
             f"max_dvl_innovation={self._filter.max_dvl_innovation_m_s:.3f}m/s, "
             f"mocap_reset_timeout={self._mocap_reset_timeout_sec:.2f}s, "
             f"sensor_timeout={self._sensor_timeout_sec:.2f}s, "
+            f"roll_prior_std={self._roll_prior_std:.3f}rad, "
+            f"use_rel_alt={self._use_rel_alt}, rel_alt='{self._rel_alt_topic}', "
+            f"rel_alt_std={self._rel_alt_std:.3f}m, "
+            f"max_rel_alt_innovation={self._max_rel_alt_innovation_m:.3f}m, "
+            f"rel_alt_scale={self._rel_alt_scale:.3f}, "
+            f"rel_alt_offset={'auto' if self._rel_alt_offset_auto else f'{self._rel_alt_offset:.3f}m'}, "
         )
     
     def _now_sec(self) -> float:
@@ -637,6 +778,7 @@ class BrovEKFOdom(Node):
         if accepted:
             self._last_pose_accepted_sec = now
             self._last_sensor_accepted_sec = now
+            self._calibrate_rel_alt_offset(position[2], now)
         else:
             self.get_logger().warn(
                 "Mocap measurement rejected.",
@@ -732,6 +874,54 @@ class BrovEKFOdom(Node):
                 throttle_duration_sec=1.0,
             )
 
+    def _calibrate_rel_alt_offset(self, mocap_z, now) -> None:
+        """Track world_z - scale*rel_alt from fresh, accepted mocap.
+
+        Only runs in auto mode; with a manual offset the param value is used
+        as-is. The offset is frozen at its last value once mocap drops, so
+        rel_alt keeps z bounded during dead-reckoning.
+        """
+        if not self._use_rel_alt or not self._rel_alt_offset_auto:
+            return
+        if self._latest_rel_alt is None or self._latest_rel_alt_sec is None:
+            return
+        if (now - self._latest_rel_alt_sec) > self._sensor_timeout_sec:
+            return
+        measured_offset = float(mocap_z) - self._rel_alt_scale * self._latest_rel_alt
+        if self._rel_alt_offset is None:
+            self._rel_alt_offset = measured_offset
+            self.get_logger().info(
+                f"Calibrated rel_alt offset: {self._rel_alt_offset:.3f}m "
+                f"(mocap_z={mocap_z:.3f}, rel_alt={self._latest_rel_alt:.3f})."
+            )
+        else:
+            alpha = self._rel_alt_offset_lpf_alpha
+            self._rel_alt_offset = (
+                (1.0 - alpha) * self._rel_alt_offset + alpha * measured_offset
+            )
+
+    def _rel_alt_cb(self, msg):
+        now = self._now_sec()
+        self._latest_rel_alt = float(msg.data)
+        self._latest_rel_alt_sec = now
+
+        if not self._use_rel_alt or not self._filter.initialized:
+            return
+        if self._rel_alt_offset is None:
+            # No offset yet; wait for the first accepted mocap to calibrate.
+            return
+
+        z_meas = self._rel_alt_scale * self._latest_rel_alt + self._rel_alt_offset
+        accepted = self._filter.update_depth(z_meas)
+        if accepted:
+            self._last_sensor_accepted_sec = now
+        else:
+            self.get_logger().warn(
+                "Rejected rel_alt depth outlier: "
+                f"max_rel_alt_innovation={self._max_rel_alt_innovation_m:.3f}m",
+                throttle_duration_sec=1.0,
+            )
+
     def _sensors_timed_out(self, now) -> bool:
         if self._sensor_timeout_sec <= 0.0:
             return False
@@ -765,6 +955,7 @@ class BrovEKFOdom(Node):
 
         dt = now - self._last_filter_sec if self._last_filter_sec is not None else 0.0
         self._filter.predict(dt)
+        self._filter.update_zero_roll_prior()
         self._last_filter_sec = now
 
         stamp = self.get_clock().now().to_msg()
