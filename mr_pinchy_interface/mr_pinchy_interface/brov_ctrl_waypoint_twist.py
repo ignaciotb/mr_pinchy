@@ -15,14 +15,25 @@ horizontal plane and heading only:
     u   = [vx, vy, omega]          (commanded velocity, odom frame)
     eta_{k+1} = eta_k + dt * u_k
 
-The emitted twist therefore leaves linear.z at zero. Because the command and the
-error both live in the odom frame, this is convention-agnostic (FRD/FLU,
-ENU/NED): the inner loop's TF turns the odom-frame twist into the body frame,
-exactly as the previous P controller relied on. The resulting problem is a
-convex QP, modeled once in CVXPY (DPP-parametrized) and re-solved with OSQP
-every tick via warm starting.
+The emitted twist therefore leaves linear.z at zero. The QP is solved in the
+odom frame (convention-agnostic: FRD/FLU, ENU/NED), then the resulting velocity
+command is TF-rotated into the body frame before publishing so RViz anchors the
+velocity arrow on the vehicle. This does not change control: the inner loop
+TF-transforms the command by its header frame anyway, and odom->base_link
+composes to the same body-frame command. If TF is momentarily unavailable the
+command falls back to the odom frame, exactly as the previous P controller
+relied on. The resulting problem is a convex QP, modeled once in CVXPY
+(DPP-parametrized) and re-solved with OSQP every tick via warm starting.
+
+To stop the limit-cycle chatter the kinematic model causes near the goal (it
+ignores vehicle momentum / inner-loop lag, so it over-corrects on small errors),
+the controller (a) commands zero once inside an arrival deadband on position and
+yaw, and (b) is detuned for a gentler approach (higher command-rate penalty,
+lower terminal weight).
 """
 from __future__ import annotations
+
+import copy
 
 import cvxpy as cp
 import numpy as np
@@ -32,12 +43,14 @@ from nav_msgs.msg import Odometry, Path
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from tf2_geometry_msgs import do_transform_pose_stamped
+from tf2_geometry_msgs import do_transform_pose_stamped, do_transform_vector3
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from mr_pinchy_interface.brov_utils import (
     quat_to_rpy,
     rpy_to_quat,
+    vector3_stamped,
+    vector3_to_array,
     wrap_pi,
 )
 
@@ -51,7 +64,7 @@ class BrovWaypointMpcController(Node):
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_ekf")
         self.declare_parameter("base_link_frame", "mr_pinchy/base_link_ekf_flu")
         self.declare_parameter("map_frame", "map")
-        self.declare_parameter("cmd_topic", "/mr_pinchy/cmd_vel")
+        self.declare_parameter("cmd_topic", "/mr_pinchy/cmd_vel_ref")
         self.declare_parameter("predicted_path_topic", "~/mpc_predicted_path")
 
         # --- MPC horizon / rate ---
@@ -69,14 +82,24 @@ class BrovWaypointMpcController(Node):
         self.declare_parameter("a_yaw_max", 0.5)     # rad/s^2
 
         # --- cost weights ---
+        # Detuned vs. a textbook tracker to avoid near-goal overshoot: stronger
+        # command-rate penalty (rd) and a softer terminal pull (qf_pos) make the
+        # approach gentler so the laggy plant doesn't ring around the setpoint.
         self.declare_parameter("q_pos", 10.0)        # stage position tracking
         self.declare_parameter("q_yaw", 2.0)         # stage yaw tracking
-        self.declare_parameter("qf_pos", 50.0)       # terminal position
+        self.declare_parameter("qf_pos", 20.0)       # terminal position
         self.declare_parameter("qf_yaw", 10.0)       # terminal yaw
         self.declare_parameter("r_v", 1.0)           # linear effort
         self.declare_parameter("r_w", 1.0)           # yaw effort
-        self.declare_parameter("rd_v", 5.0)          # linear rate (smoothness)
-        self.declare_parameter("rd_w", 5.0)          # yaw rate
+        self.declare_parameter("rd_v", 12.0)         # linear rate (smoothness)
+        self.declare_parameter("rd_w", 12.0)         # yaw rate
+
+        # --- arrival deadband ---
+        # Within this position+yaw tolerance of the goal, command zero so sensor
+        # noise / tiny model errors can't drive a limit cycle. Re-engages on its
+        # own if the vehicle drifts back outside the band.
+        self.declare_parameter("arrival_pos_tol", 0.05)   # m
+        self.declare_parameter("arrival_yaw_tol", 0.05)   # rad (~3 deg)
 
         # --- tank soft constraints (DISABLED by default) ---
         # Horizontal (x, y) bounds only; see the brov_ctrl_twist_simple tank
@@ -92,7 +115,9 @@ class BrovWaypointMpcController(Node):
         odom_topic = gp("odom_topic").get_parameter_value().string_value
         cmd_topic = gp("cmd_topic").get_parameter_value().string_value
         path_topic = gp("predicted_path_topic").get_parameter_value().string_value
-        self._base_link_frame = gp("base_link_frame").get_parameter_value().string_value
+        self._base_link_frame = (
+            gp("base_link_frame").get_parameter_value().string_value.lstrip("/")
+        )
         self._map_frame = gp("map_frame").get_parameter_value().string_value
 
         self._N = int(gp("horizon").value)
@@ -112,6 +137,9 @@ class BrovWaypointMpcController(Node):
         self._Qfh = np.sqrt(np.diag([gp("qf_pos").value] * 2 + [gp("qf_yaw").value]))
         self._Rh = np.sqrt(np.diag([gp("r_v").value] * 2 + [gp("r_w").value]))
         self._Rdh = np.sqrt(np.diag([gp("rd_v").value] * 2 + [gp("rd_w").value]))
+
+        self._arrival_pos_tol = float(gp("arrival_pos_tol").value)
+        self._arrival_yaw_tol = float(gp("arrival_yaw_tol").value)
 
         self._enable_tank = bool(gp("enable_tank_constraint").value)
         self._tank_min = np.asarray(gp("tank_min").value, dtype=float)
@@ -209,6 +237,53 @@ class BrovWaypointMpcController(Node):
         twist.header.frame_id = self._base_link_frame
         self._cmd_pub.publish(twist)
         self._u_prev = np.zeros(3, dtype=float)
+
+    def _rotate_vec_to_base_link(
+        self, vec, source_frame: str, stamp,
+    ) -> np.ndarray | None:
+        """Rotate a free vector (e.g. velocity) from source_frame into the body
+        frame via TF. Returns None if the transform is unavailable."""
+        source_frame = source_frame.lstrip("/")
+        if source_frame == self._base_link_frame:
+            return vector3_to_array(vec)
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                self._base_link_frame, source_frame, rclpy.time.Time(),
+                timeout=Duration(seconds=0.05),
+            )
+        except TransformException:
+            return None
+        vs = vector3_stamped(vec, frame_id=source_frame, stamp=stamp)
+        return vector3_to_array(do_transform_vector3(vs, copy.deepcopy(tf)).vector)
+
+    def _publish_cmd(self, u0: np.ndarray, odom_frame: str) -> None:
+        """Publish the MPC command. The solver works in the odom frame, but we
+        re-express the twist in the body frame so RViz anchors the velocity
+        arrow on the vehicle. Control is unchanged: the inner loop TF-transforms
+        the command by its header frame, and odom->base_link composes to the
+        same body-frame command either way. Falls back to the odom frame if TF
+        is momentarily unavailable, so control is never interrupted."""
+        stamp = self.get_clock().now().to_msg()
+        twist = TwistStamped()
+        twist.header.stamp = stamp
+        twist.twist.linear.x = float(u0[0])
+        twist.twist.linear.y = float(u0[1])
+        twist.twist.angular.z = float(u0[2])
+
+        lin = self._rotate_vec_to_base_link(twist.twist.linear, odom_frame, stamp)
+        ang = self._rotate_vec_to_base_link(twist.twist.angular, odom_frame, stamp)
+        if lin is not None and ang is not None:
+            twist.twist.linear.x, twist.twist.linear.y, twist.twist.linear.z = map(float, lin)
+            twist.twist.angular.x, twist.twist.angular.y, twist.twist.angular.z = map(float, ang)
+            twist.header.frame_id = self._base_link_frame
+        else:
+            twist.header.frame_id = odom_frame  # odom-frame fallback (still valid)
+            self.get_logger().warn(
+                f"TF {odom_frame} -> {self._base_link_frame} unavailable; "
+                "publishing cmd in odom frame.",
+                throttle_duration_sec=2.0,
+            )
+        self._cmd_pub.publish(twist)
 
     # ------------------------------------------------------------------ MPC
     def _build_problem(self) -> None:
@@ -336,6 +411,15 @@ class BrovWaypointMpcController(Node):
         x0 = np.array([odom_pose.position.x, odom_pose.position.y, cur_yaw])
         goal_vec = np.array([goal.position.x, goal.position.y, goal_yaw])
 
+        # Arrival deadband: once within tolerance, command zero so noise / small
+        # model errors can't drive a limit cycle around the setpoint. goal_yaw is
+        # already unwrapped onto cur_yaw's branch, so the diff is the true error.
+        pos_err = float(np.hypot(goal_vec[0] - x0[0], goal_vec[1] - x0[1]))
+        yaw_err = abs(goal_vec[2] - x0[2])
+        if pos_err <= self._arrival_pos_tol and yaw_err <= self._arrival_yaw_tol:
+            self._publish_zero_twist()
+            return
+
         solution = self._solve_mpc(x0, goal_vec)
         if solution is None:
             self._publish_zero_twist()
@@ -346,13 +430,7 @@ class BrovWaypointMpcController(Node):
         u0, X_sol = solution
         self._u_prev = u0
 
-        twist = TwistStamped()
-        twist.header.stamp = self.get_clock().now().to_msg()
-        twist.header.frame_id = odom_frame  # odom-frame velocity, like the old node
-        twist.twist.linear.x = float(u0[0])
-        twist.twist.linear.y = float(u0[1])
-        twist.twist.angular.z = float(u0[2])
-        self._cmd_pub.publish(twist)
+        self._publish_cmd(u0, odom_frame)
 
         self._publish_predicted_path(X_sol, odom_frame, odom_pose.position.z)
 
