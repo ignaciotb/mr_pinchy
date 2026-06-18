@@ -38,7 +38,7 @@ class BrovTwistSimpleController(Node):
         mc_topic = str(self.get_parameter("manual_control_topic").value)
         self._base_link_frame = normalize_tf_frame_id(self.get_parameter("base_link_frame").value)
 
-        self._debug_log = True
+        self._debug_log = False
         self._publish_rate_hz = 50.0
         self._odom_timeout_sec = 0.3
         self._tf_timeout = Duration(seconds=0.05)

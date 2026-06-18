@@ -98,8 +98,8 @@ class BrovWaypointMpcController(Node):
         # Within this position+yaw tolerance of the goal, command zero so sensor
         # noise / tiny model errors can't drive a limit cycle. Re-engages on its
         # own if the vehicle drifts back outside the band.
-        self.declare_parameter("arrival_pos_tol", 0.05)   # m
-        self.declare_parameter("arrival_yaw_tol", 0.05)   # rad (~3 deg)
+        self.declare_parameter("arrival_pos_tol", 0.1)   # m
+        self.declare_parameter("arrival_yaw_tol", 0.1)   # rad (~3 deg)
 
         # --- tank soft constraints (DISABLED by default) ---
         # Horizontal (x, y) bounds only; see the brov_ctrl_twist_simple tank
