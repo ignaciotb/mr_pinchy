@@ -106,13 +106,6 @@ def base_link_z_axis_angle_rad(q):
     return float(math.acos(dot))
 
 
-def base_link_x_axis_angle_rad(q):
-    rotation = quat_to_rotation_matrix(q)
-    base_link_x_in_mocap = rotation[:, 0]
-    dot = float(np.clip(base_link_x_in_mocap[0], -1.0, 1.0))
-    return float(math.acos(dot))
-
-
 class QuaternionCvEkf:
     def __init__(
         self,
@@ -126,7 +119,6 @@ class QuaternionCvEkf:
         max_position_innovation_m=0.25,
         max_orientation_innovation_rad=0.75,
         max_base_link_z_axis_angle_rad=0.4,
-        max_base_link_x_axis_angle_rad=math.pi / 3.0,
         max_gyro_innovation_rad_s=2.0,
         max_dvl_innovation_m_s=1.5,
         max_depth_innovation_m=1.0,
@@ -143,7 +135,6 @@ class QuaternionCvEkf:
         self.max_position_innovation_m = max_position_innovation_m
         self.max_orientation_innovation_rad = max_orientation_innovation_rad
         self.max_base_link_z_axis_angle_rad = max_base_link_z_axis_angle_rad
-        self.max_base_link_x_axis_angle_rad = max_base_link_x_axis_angle_rad
         self.max_gyro_innovation_rad_s = max_gyro_innovation_rad_s
         self.max_dvl_innovation_m_s = max_dvl_innovation_m_s
         self.max_depth_innovation_m = max_depth_innovation_m
@@ -284,16 +275,10 @@ class QuaternionCvEkf:
     ):
         orientation_meas = quat_normalize(orientation_meas)
         z_axis_angle_rad = base_link_z_axis_angle_rad(orientation_meas)
-        z_axis_accepted = self._within_gate(
+        axis_accepted = self._within_gate(
             z_axis_angle_rad,
             self.max_base_link_z_axis_angle_rad,
         )
-        x_axis_angle_rad = base_link_x_axis_angle_rad(orientation_meas)
-        x_axis_accepted = self._within_gate(
-            x_axis_angle_rad,
-            self.max_base_link_x_axis_angle_rad,
-        )
-        axis_accepted = z_axis_accepted and x_axis_accepted
 
         if not self.initialized:
             return axis_accepted, axis_accepted, np.zeros(3, dtype=float), np.zeros(3, dtype=float)
@@ -327,13 +312,9 @@ class QuaternionCvEkf:
         """
         orientation_meas = quat_normalize(orientation_meas)
         z_axis_angle_rad = base_link_z_axis_angle_rad(orientation_meas)
-        x_axis_angle_rad = base_link_x_axis_angle_rad(orientation_meas)
         return self._within_gate(
             z_axis_angle_rad,
             self.max_base_link_z_axis_angle_rad,
-        ) and self._within_gate(
-            x_axis_angle_rad,
-            self.max_base_link_x_axis_angle_rad,
         )
 
     def reset_copy(self):
@@ -349,7 +330,6 @@ class QuaternionCvEkf:
             max_position_innovation_m=self.max_position_innovation_m,
             max_orientation_innovation_rad=self.max_orientation_innovation_rad,
             max_base_link_z_axis_angle_rad=self.max_base_link_z_axis_angle_rad,
-            max_base_link_x_axis_angle_rad=self.max_base_link_x_axis_angle_rad,
             max_gyro_innovation_rad_s=self.max_gyro_innovation_rad_s,
             max_dvl_innovation_m_s=self.max_dvl_innovation_m_s,
             max_depth_innovation_m=self.max_depth_innovation_m,
@@ -690,7 +670,6 @@ class BrovEKFOdom(Node):
             f"max_position_innovation={self._filter.max_position_innovation_m:.3f}m, "
             f"max_orientation_innovation={self._filter.max_orientation_innovation_rad:.3f}rad, "
             f"max_base_link_z_axis_angle={self._filter.max_base_link_z_axis_angle_rad:.3f}rad, "
-            f"max_base_link_x_axis_angle={self._filter.max_base_link_x_axis_angle_rad:.3f}rad, "
             f"gyro_std={self._filter.gyro_std:.3f}rad/s, "
             f"max_gyro_innovation={self._filter.max_gyro_innovation_rad_s:.3f}rad/s, "
             f"dvl_std={self._filter.dvl_std:.3f}m/s, "
