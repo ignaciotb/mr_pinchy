@@ -27,34 +27,10 @@ def generate_launch_description() -> LaunchDescription:
     )
     use_sim_time = {"use_sim_time": LaunchConfiguration("use_sim_time")}
 
-    waypoint_wrench_controller = Node(
-        package="mr_pinchy_interface",
-        executable="brov_ctrl_waypoint_wrench",
-        name="brov_ctrl_waypoint_wrench",
-        output="screen",
-        parameters=[use_sim_time],
-    )
-
     waypoint_twist_controller = Node(
         package="mr_pinchy_interface",
         executable="brov_ctrl_waypoint_twist",
         name="brov_ctrl_waypoint_twist",
-        output="screen",
-        parameters=[use_sim_time],
-    )
-
-    twist_controller = Node(
-        package="mr_pinchy_interface",
-        executable="brov_ctrl_twist",
-        name="brov_ctrl_twist",
-        output="screen",
-        parameters=[use_sim_time],
-    )
-
-    safe_controller = Node(
-        package="mr_pinchy_interface",
-        executable="brov_ctrl_safe",
-        name="brov_ctrl_safe",
         output="screen",
         parameters=[use_sim_time],
     )
@@ -65,15 +41,6 @@ def generate_launch_description() -> LaunchDescription:
         name="brov_odom_ekf",
         output="screen",
         parameters=[use_sim_time],
-    )
-    
-    urdf = os.path.join(get_package_share_directory("mr_pinchy_interface"), "urdf", "bluerov2_heavy.urdf.xacro")
-    robot_description = xacro.process_file(urdf).toxml()
-    robot_state_pub = Node(
-        package="robot_state_publisher",
-        executable="robot_state_publisher",
-        name="robot_state_publisher",
-        parameters=[{"robot_description": robot_description}, use_sim_time],
     )
     
     watertank_description = os.path.join(get_package_share_directory("mr_pinchy_interface"), "urdf", "watertank_description", "robots", "watertank_default.urdf.xacro")
@@ -146,7 +113,7 @@ def generate_launch_description() -> LaunchDescription:
             'publish_stamped_twist': True,
             'frame': 'mr_pinchy/base_link_ekf_flu',
         }],
-        remappings=[('/cmd_vel', '/mr_pinchy/cmd_vel_ref')]
+        remappings=[('/cmd_vel', '/mr_pinchy/cmd_vel')]
     )
 
     return LaunchDescription(

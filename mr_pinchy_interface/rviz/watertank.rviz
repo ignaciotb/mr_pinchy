@@ -550,25 +550,6 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: false
-    - Alpha: 1
-      Angular Arrow Scale: 0.10000000149011612
-      Angular Color: 204; 204; 51
-      Arrow Width: 0.5
-      Class: rviz_default_plugins/TwistStamped
-      Enabled: true
-      Hide Small Values: false
-      History Length: 1
-      Linear Arrow Scale: 2
-      Linear Color: 204; 51; 51
-      Name: TwistStamped
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        Filter size: 10
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /mr_pinchy/cmd_vel_ref
-      Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: false
       Name: MarkerArray

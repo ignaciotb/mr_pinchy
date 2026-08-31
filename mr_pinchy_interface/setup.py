@@ -36,16 +36,10 @@ setup(
     license='TODO: License declaration',
     entry_points={
         'console_scripts': [
-            'brov_ctrl_waypoint_wrench = mr_pinchy_interface.brov_ctrl_waypoint_wrench:main',
             'brov_ctrl_waypoint_twist = mr_pinchy_interface.brov_ctrl_waypoint_twist:main',
-            'brov_ctrl_safe = mr_pinchy_interface.brov_ctrl_safe:main',
-            'brov_ctrl_twist = mr_pinchy_interface.brov_ctrl_twist:main',
             'brov_ctrl_twist_simple = mr_pinchy_interface.brov_ctrl_twist_simple:main',
-            'brov_ctrl_twist_simple_autotune_helper = mr_pinchy_interface.brov_ctrl_twist_simple_autotune_helper:main',
             'brov_odom_ekf = mr_pinchy_interface.brov_odom_ekf:main',
-            'brov_odom_ekf_ros2 = mr_pinchy_interface.brov_odom_ekf_ros2:main',
             'sonar_filter = mr_pinchy_interface.sonar_filter:main',
-            'overlay_rviz = mr_pinchy_interface.overlay_rviz:main',
         ],
     },
 )

@@ -44,17 +44,6 @@ class BrovTwistSimpleController(Node):
         self._tf_timeout = Duration(seconds=0.05)
         self._cmd_timeout_sec = 0.3
 
-        # # PID gains for [surge, sway, heave, yaw]
-        # self._kp = np.array([2, 2, 0.8, 0.8], dtype=float)
-        # self._ki = np.array([0.1, 0.1, 0.4, 0.1], dtype=float)
-        # self._kd = np.array([0.0, 0.0, 0.2, 0.0], dtype=float)
-        # self._integral = np.zeros(4, dtype=float)
-        # # Heave needs more integral authority to absorb the constant buoyancy bias.
-        # self._integral_limit = np.array([0.5, 0.5, 1.0, 0.5], dtype=float)
-
-        # # Feedforward: linear mapping from commanded velocity to control output
-        # self._kff = np.array([1.0 / 0.5, 1.0 / 0.4, 1.0 / 0.6, 1.0 / 1.3], dtype=float)
-
         # PID gains for [surge, sway, heave, yaw]
         self._kp = np.array([7., 8, 0.5, 1.4], dtype=float)
         self._ki = np.array([0.5, 0.5, 0.0, 0.3], dtype=float)

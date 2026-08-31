@@ -213,3 +213,5 @@ output/
 sys_id/
 .codex
 mr_pinchy_interface/mr_pinchy_interface/__pycache__/__init__.cpython-310.pyc
+.claude/
+.agents/

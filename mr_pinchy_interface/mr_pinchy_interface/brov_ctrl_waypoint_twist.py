@@ -64,7 +64,7 @@ class BrovWaypointMpcController(Node):
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_ekf")
         self.declare_parameter("base_link_frame", "mr_pinchy/base_link_ekf_flu")
         self.declare_parameter("map_frame", "map")
-        self.declare_parameter("cmd_topic", "/mr_pinchy/cmd_vel_ref")
+        self.declare_parameter("cmd_topic", "/mr_pinchy/cmd_vel")
         self.declare_parameter("predicted_path_topic", "~/mpc_predicted_path")
 
         # --- MPC horizon / rate ---
