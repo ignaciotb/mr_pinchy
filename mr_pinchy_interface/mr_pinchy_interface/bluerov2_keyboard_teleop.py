@@ -4,6 +4,10 @@ ROS 2 node: read the same TTY keys as ``bluerov2_keyboard_teleop``, print them,
 publish MAVROS RC override, and call the arming service.
 
 - Publishes ``mavros_msgs/msg/OverrideRCIn`` on ``/mavros/rc/override`` (param ``rc_topic``).
+- Publishes the human-readable labels of the motions currently driving that RC
+  override as a comma-separated ``std_msgs/msg/String`` on
+  ``/keyboard_echo/key_labels`` (param ``key_labels_topic``), one message per
+  RC override message. Empty string means "all axes neutral".
 - Calls ``mavros_msgs/srv/CommandBool`` on ``/mavros/cmd/arming``: **t** arm, **y** disarm.
 
 Run in an interactive terminal (``ros2 run mr_pinchy_interface keyboard_echo``) and focus it.
@@ -30,6 +34,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from mavros_msgs.msg import OverrideRCIn
+from std_msgs.msg import String
 from mavros_msgs.srv import CommandBool
 
 # Same mapping labels as bluerov2_keyboard_teleop (TTY backend)
@@ -66,6 +71,12 @@ _TTY_KEY_TO_TAGS: dict[str, tuple[str, ...]] = {
     "v": ("pitch_down",),
     "x": ("roll_left",),
     "c": ("roll_right",),
+}
+
+# Motion tag -> the same label the key prints, so the published labels and the
+# printed ones can never drift apart.
+_TAG_TO_LABEL: dict[str, str] = {
+    tag: _KEY_LABELS[key] for key, tags in _TTY_KEY_TO_TAGS.items() for tag in tags
 }
 
 
@@ -162,6 +173,7 @@ class BrovKeyboardController(Node):
         super().__init__("keyboard_echo")
 
         self.declare_parameter("rc_topic", "/mavros/rc/override")
+        self.declare_parameter("key_labels_topic", "/keyboard_echo/key_labels")
         self.declare_parameter("arming_service", "/mavros/cmd/arming")
         self.declare_parameter("publish_rate_hz", 20.0)
         self.declare_parameter("neutral_pwm", 1500)
@@ -169,6 +181,9 @@ class BrovKeyboardController(Node):
         self.declare_parameter("key_idle_timeout_sec", 0.4)
 
         rc_topic = self.get_parameter("rc_topic").get_parameter_value().string_value
+        key_labels_topic = (
+            self.get_parameter("key_labels_topic").get_parameter_value().string_value
+        )
         arm_srv = self.get_parameter("arming_service").get_parameter_value().string_value
         rate_hz = self.get_parameter("publish_rate_hz").get_parameter_value().double_value
         if rate_hz <= 0.0:
@@ -194,6 +209,7 @@ class BrovKeyboardController(Node):
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self._rc_pub = self.create_publisher(OverrideRCIn, rc_topic, qos)
+        self._key_labels_pub = self.create_publisher(String, key_labels_topic, qos)
 
         self._arming_client = self.create_client(CommandBool, arm_srv)
         self._armed = False
@@ -217,7 +233,8 @@ class BrovKeyboardController(Node):
         period = 1.0 / rate_hz
         self.create_timer(period, self._tick)
         self.get_logger().info(
-            f"keyboard_echo: publishing OverrideRCIn on '{rc_topic}' at {rate_hz:.1f} Hz; "
+            f"keyboard_echo: publishing OverrideRCIn on '{rc_topic}' and key labels on "
+            f"'{key_labels_topic}' at {rate_hz:.1f} Hz; "
             f"arming '{arm_srv}' [t]/[y]; key_idle_timeout={idle_timeout:.2f}s"
         )
 
@@ -293,34 +310,55 @@ class BrovKeyboardController(Node):
         for idx in range(6):
             ch[idx] = self._neutral
 
+        # Tags that actually moved a channel off neutral, in axis order.
+        active: list[str] = []
+
         if self._is_motion_active("up"):
             ch[2] = pos
+            active.append("up")
         elif self._is_motion_active("down"):
             ch[2] = neg
+            active.append("down")
         if self._is_motion_active("yaw_left"):
             ch[3] = neg
+            active.append("yaw_left")
         elif self._is_motion_active("yaw_right"):
             ch[3] = pos
+            active.append("yaw_right")
         if self._is_motion_active("fwd"):
             ch[4] = pos
+            active.append("fwd")
         elif self._is_motion_active("back"):
             ch[4] = neg
+            active.append("back")
         if self._is_motion_active("left"):
             ch[5] = neg
+            active.append("left")
         elif self._is_motion_active("right"):
             ch[5] = pos
+            active.append("right")
         if self._is_motion_active("roll_left"):
             ch[1] = neg
+            active.append("roll_left")
         elif self._is_motion_active("roll_right"):
             ch[1] = pos
+            active.append("roll_right")
         if self._is_motion_active("pitch_up"):
             ch[0] = pos
+            active.append("pitch_up")
         elif self._is_motion_active("pitch_down"):
             ch[0] = neg
+            active.append("pitch_down")
 
         msg = OverrideRCIn()
         msg.channels = ch
         self._rc_pub.publish(msg)
+
+        # One label message per RC override message, so a subscriber can line the
+        # two streams up. Empty data = every axis at neutral.
+        labels = String()
+        labels.data = ",".join(_TAG_TO_LABEL[tag] for tag in active)
+        self._key_labels_pub.publish(labels)
 
     def _tick(self) -> None:
         batch: list[tuple] = []
