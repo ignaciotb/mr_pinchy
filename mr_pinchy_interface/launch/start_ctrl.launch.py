@@ -159,7 +159,7 @@ def generate_launch_description() -> LaunchDescription:
             sonar_launch,
             joy_node,
             teleop_node,
-            waypoint_twist_controller,
+            # waypoint_twist_controller,
             watertank_state_pub,
             rviz_node,
         ]
