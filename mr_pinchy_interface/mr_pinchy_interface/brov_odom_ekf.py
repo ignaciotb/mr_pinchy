@@ -1,0 +1,1010 @@
+#!/usr/bin/env python3
+
+import math
+
+import numpy as np
+import rclpy
+from geometry_msgs.msg import PoseStamped, TransformStamped, TwistWithCovarianceStamped
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import Imu
+from std_msgs.msg import Float64
+from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster
+
+
+def quat_normalize(q):
+    q = np.asarray(q, dtype=float)
+    norm = np.linalg.norm(q)
+    if norm < 1e-12:
+        return np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
+    q = q / norm
+    if q[3] < 0.0:
+        q = -q
+    return q
+
+
+def quat_conjugate(q):
+    q = np.asarray(q, dtype=float)
+    return np.array([-q[0], -q[1], -q[2], q[3]], dtype=float)
+
+
+def quat_multiply(q1, q2):
+    x1, y1, z1, w1 = np.asarray(q1, dtype=float)
+    x2, y2, z2, w2 = np.asarray(q2, dtype=float)
+    return np.array(
+        [
+            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        ],
+        dtype=float,
+    )
+
+
+def quat_exp(rotvec):
+    rotvec = np.asarray(rotvec, dtype=float)
+    angle = float(np.linalg.norm(rotvec))
+    if angle < 1e-12:
+        return quat_normalize(np.array([0.5 * rotvec[0], 0.5 * rotvec[1], 0.5 * rotvec[2], 1.0]))
+    axis = rotvec / angle
+    half = 0.5 * angle
+    return quat_normalize(np.concatenate([axis * math.sin(half), [math.cos(half)]]))
+
+
+def quat_log(q):
+    q = quat_normalize(q)
+    if q[3] < 0.0:
+        q = -q
+    vector = q[:3]
+    vector_norm = float(np.linalg.norm(vector))
+    if vector_norm < 1e-12:
+        return 2.0 * vector
+    angle = 2.0 * math.atan2(vector_norm, q[3])
+    if angle > math.pi:
+        angle -= 2.0 * math.pi
+    return vector * (angle / vector_norm)
+
+
+def skew(v):
+    v = np.asarray(v, dtype=float)
+    return np.array(
+        [
+            [0.0, -v[2], v[1]],
+            [v[2], 0.0, -v[0]],
+            [-v[1], v[0], 0.0],
+        ],
+        dtype=float,
+    )
+
+
+def quat_to_rotation_matrix(q):
+    x, y, z, w = quat_normalize(q)
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+    return np.array(
+        [
+            [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+            [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+            [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+        ],
+        dtype=float,
+    )
+
+
+def orientation_residual(q_meas, q_pred):
+    q_err = quat_multiply(q_meas, quat_conjugate(q_pred))
+    return quat_log(q_err)
+
+
+def base_link_z_axis_angle_rad(q):
+    rotation = quat_to_rotation_matrix(q)
+    base_link_z_in_mocap = rotation[:, 2]
+    dot = float(np.clip(base_link_z_in_mocap[2], -1.0, 1.0))
+    return float(math.acos(dot))
+
+
+class QuaternionCvEkf:
+    def __init__(
+        self,
+        position_std=0.2,
+        orientation_std=0.2,
+        linear_accel_std=0.5,
+        angular_accel_std=1.0,
+        gyro_std=0.05,
+        dvl_std=0.1,
+        depth_std=0.1,
+        max_position_innovation_m=0.25,
+        max_orientation_innovation_rad=0.75,
+        max_base_link_z_axis_angle_rad=0.4,
+        max_gyro_innovation_rad_s=2.0,
+        max_dvl_innovation_m_s=1.5,
+        max_depth_innovation_m=1.0,
+        roll_prior_std=0.1,
+    ):
+        self.position_std = position_std
+        self.orientation_std = orientation_std
+        self.linear_accel_std = linear_accel_std
+        self.angular_accel_std = angular_accel_std
+        self.gyro_std = gyro_std
+        self.dvl_std = dvl_std
+        self.depth_std = depth_std
+        self.roll_prior_std = roll_prior_std
+        self.max_position_innovation_m = max_position_innovation_m
+        self.max_orientation_innovation_rad = max_orientation_innovation_rad
+        self.max_base_link_z_axis_angle_rad = max_base_link_z_axis_angle_rad
+        self.max_gyro_innovation_rad_s = max_gyro_innovation_rad_s
+        self.max_dvl_innovation_m_s = max_dvl_innovation_m_s
+        self.max_depth_innovation_m = max_depth_innovation_m
+        self.position = np.zeros(3, dtype=float)
+        self.linear_velocity = np.zeros(3, dtype=float)
+        self.orientation = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
+        self.angular_velocity = np.zeros(3, dtype=float)
+        self.covariance = np.eye(12, dtype=float)
+        self.initialized = False
+
+    def initialize(self, position, orientation):
+        self.position = np.asarray(position, dtype=float).copy()
+        self.linear_velocity = np.zeros(3, dtype=float)
+        self.orientation = quat_normalize(orientation)
+        self.angular_velocity = np.zeros(3, dtype=float)
+        self.covariance = np.diag(
+            [
+                self.position_std**2,
+                self.position_std**2,
+                self.position_std**2,
+                1.0,
+                1.0,
+                1.0,
+                self.orientation_std**2,
+                self.orientation_std**2,
+                self.orientation_std**2,
+                1.0,
+                1.0,
+                1.0,
+            ]
+        )
+        self.initialized = True
+
+    def predict(self, dt):
+        if not self.initialized:
+            return
+        dt = max(float(dt), 0.0)
+        if dt <= 1e-9:
+            return
+
+        snap = self._snapshot()
+
+        self.position = self.position + self.linear_velocity * dt
+        delta_q = quat_exp(self.angular_velocity * dt)
+        self.orientation = quat_normalize(quat_multiply(delta_q, self.orientation))
+
+        f = np.eye(12, dtype=float)
+        f[0:3, 3:6] = np.eye(3) * dt
+        f[6:9, 9:12] = np.eye(3) * dt
+
+        q = np.zeros((12, 12), dtype=float)
+        linear_accel_var = self.linear_accel_std**2
+        angular_accel_var = self.angular_accel_std**2
+        q[0:3, 0:3] = np.eye(3) * linear_accel_var * (dt**4) / 4.0
+        q[0:3, 3:6] = np.eye(3) * linear_accel_var * (dt**3) / 2.0
+        q[3:6, 0:3] = q[0:3, 3:6]
+        q[3:6, 3:6] = np.eye(3) * linear_accel_var * (dt**2)
+        q[6:9, 6:9] = np.eye(3) * angular_accel_var * (dt**4) / 4.0
+        q[6:9, 9:12] = np.eye(3) * angular_accel_var * (dt**3) / 2.0
+        q[9:12, 6:9] = q[6:9, 9:12]
+        q[9:12, 9:12] = np.eye(3) * angular_accel_var * (dt**2)
+
+        self.covariance = f @ self.covariance @ f.T + q
+        self.covariance = 0.5 * (self.covariance + self.covariance.T)
+
+        if not self._orientation_z_safe():
+            self._restore(snap)
+
+    def update(
+        self,
+        position_meas,
+        orientation_meas,
+    ):
+        (
+            position_accepted,
+            orientation_accepted,
+            position_residual,
+            orientation_residual_vec,
+        ) = self._check_pose_measurement(
+            position_meas,
+            orientation_meas,
+        )
+        orientation_meas = quat_normalize(orientation_meas)
+
+        if not self.initialized:
+            both = position_accepted and orientation_accepted
+            if both:
+                self.initialize(position_meas, orientation_meas)
+            return both
+
+        if (not position_accepted) or (not orientation_accepted):
+            return False
+
+        snap = self._snapshot()
+        residual = np.concatenate(
+            [position_residual, orientation_residual_vec]
+        )
+        h = np.zeros((6, 12), dtype=float)
+        h[0:3, 0:3] = np.eye(3)
+        h[3:6, 6:9] = np.eye(3)
+        r = np.diag(
+            [
+                self.position_std**2,
+                self.position_std**2,
+                self.position_std**2,
+                self.orientation_std**2,
+                self.orientation_std**2,
+                self.orientation_std**2,
+            ]
+        )
+
+        pht = self.covariance @ h.T
+        s = h @ pht + r
+        kalman_gain = pht @ np.linalg.inv(s)
+        correction = kalman_gain @ residual
+
+        self.position = self.position + correction[0:3]
+        self.linear_velocity = self.linear_velocity + correction[3:6]
+        self.orientation = quat_normalize(
+            quat_multiply(quat_exp(correction[6:9]), self.orientation)
+        )
+        self.angular_velocity = self.angular_velocity + correction[9:12]
+
+        identity = np.eye(12, dtype=float)
+        ikh = identity - kalman_gain @ h
+        self.covariance = ikh @ self.covariance @ ikh.T + kalman_gain @ r @ kalman_gain.T
+        self.covariance = 0.5 * (self.covariance + self.covariance.T)
+
+        if not self._orientation_z_safe():
+            self._restore(snap)
+            return False
+        return True
+
+    def _check_pose_measurement(
+        self,
+        position_meas,
+        orientation_meas,
+    ):
+        orientation_meas = quat_normalize(orientation_meas)
+        z_axis_angle_rad = base_link_z_axis_angle_rad(orientation_meas)
+        axis_accepted = self._within_gate(
+            z_axis_angle_rad,
+            self.max_base_link_z_axis_angle_rad,
+        )
+
+        if not self.initialized:
+            return axis_accepted, axis_accepted, np.zeros(3, dtype=float), np.zeros(3, dtype=float)
+
+        position_meas = np.asarray(position_meas, dtype=float)
+        position_residual = position_meas - self.position
+        orientation_residual_vec = orientation_residual(
+            orientation_meas,
+            self.orientation,
+        )
+        position_innovation_m = float(np.linalg.norm(position_residual))
+        orientation_innovation_rad = float(np.linalg.norm(orientation_residual_vec))
+
+        position_accepted = self._within_gate(
+            position_innovation_m,
+            self.max_position_innovation_m,
+        )
+        orientation_accepted = self._within_gate(
+            orientation_innovation_rad,
+            self.max_orientation_innovation_rad,
+        )
+
+        orientation_accepted = orientation_accepted and axis_accepted
+        return position_accepted, orientation_accepted, position_residual, orientation_residual_vec
+
+    def orientation_meas_safe(self, orientation_meas):
+        """Whether a candidate mocap orientation is sane on its own.
+
+        Used to decide if a measurement is trustworthy enough to reset the
+        filter from, independent of the (possibly drifted) current state.
+        """
+        orientation_meas = quat_normalize(orientation_meas)
+        z_axis_angle_rad = base_link_z_axis_angle_rad(orientation_meas)
+        return self._within_gate(
+            z_axis_angle_rad,
+            self.max_base_link_z_axis_angle_rad,
+        )
+
+    def reset_copy(self):
+        return QuaternionCvEkf(
+            position_std=self.position_std,
+            orientation_std=self.orientation_std,
+            linear_accel_std=self.linear_accel_std,
+            angular_accel_std=self.angular_accel_std,
+            gyro_std=self.gyro_std,
+            dvl_std=self.dvl_std,
+            depth_std=self.depth_std,
+            roll_prior_std=self.roll_prior_std,
+            max_position_innovation_m=self.max_position_innovation_m,
+            max_orientation_innovation_rad=self.max_orientation_innovation_rad,
+            max_base_link_z_axis_angle_rad=self.max_base_link_z_axis_angle_rad,
+            max_gyro_innovation_rad_s=self.max_gyro_innovation_rad_s,
+            max_dvl_innovation_m_s=self.max_dvl_innovation_m_s,
+            max_depth_innovation_m=self.max_depth_innovation_m,
+        )
+
+    def update_body_angular_velocity(
+        self,
+        angular_velocity_body_meas,
+    ):
+        if not self.initialized:
+            return False
+
+        angular_velocity_body_meas = np.asarray(
+            angular_velocity_body_meas,
+            dtype=float,
+        )
+        angular_velocity_world_meas = (
+            quat_to_rotation_matrix(self.orientation) @ angular_velocity_body_meas
+        )
+        residual = angular_velocity_world_meas - self.angular_velocity
+        innovation_rad_s = float(np.linalg.norm(residual))
+        accepted = self._within_gate(
+            innovation_rad_s,
+            self.max_gyro_innovation_rad_s,
+        )
+        if not accepted:
+            return False
+
+        snap = self._snapshot()
+
+        h = np.zeros((3, 12), dtype=float)
+        h[:, 6:9] = skew(self.angular_velocity)
+        h[:, 9:12] = np.eye(3)
+        r = np.eye(3, dtype=float) * self.gyro_std**2
+
+        pht = self.covariance @ h.T
+        s = h @ pht + r
+        kalman_gain = pht @ np.linalg.inv(s)
+        correction = kalman_gain @ residual
+
+        self.position = self.position + correction[0:3]
+        self.linear_velocity = self.linear_velocity + correction[3:6]
+        self.orientation = quat_normalize(
+            quat_multiply(quat_exp(correction[6:9]), self.orientation)
+        )
+        self.angular_velocity = self.angular_velocity + correction[9:12]
+
+        identity = np.eye(12, dtype=float)
+        ikh = identity - kalman_gain @ h
+        self.covariance = ikh @ self.covariance @ ikh.T + kalman_gain @ r @ kalman_gain.T
+        self.covariance = 0.5 * (self.covariance + self.covariance.T)
+
+        if not self._orientation_z_safe():
+            self._restore(snap)
+            return False
+        return True
+
+    def update_body_linear_velocity(
+        self,
+        linear_velocity_body_meas,
+    ):
+        if not self.initialized:
+            return False
+
+        linear_velocity_body_meas = np.asarray(
+            linear_velocity_body_meas,
+            dtype=float,
+        )
+        linear_velocity_world_meas = (
+            quat_to_rotation_matrix(self.orientation) @ linear_velocity_body_meas
+        )
+        residual = linear_velocity_world_meas - self.linear_velocity
+        innovation_m_s = float(np.linalg.norm(residual))
+        accepted = self._within_gate(
+            innovation_m_s,
+            self.max_dvl_innovation_m_s,
+        )
+        if not accepted:
+            return False
+
+        snap = self._snapshot()
+
+        h = np.zeros((3, 12), dtype=float)
+        h[:, 3:6] = np.eye(3)
+        h[:, 6:9] = skew(self.linear_velocity)
+        r = np.eye(3, dtype=float) * self.dvl_std**2
+
+        pht = self.covariance @ h.T
+        s = h @ pht + r
+        kalman_gain = pht @ np.linalg.inv(s)
+        correction = kalman_gain @ residual
+
+        self.position = self.position + correction[0:3]
+        self.linear_velocity = self.linear_velocity + correction[3:6]
+        self.orientation = quat_normalize(
+            quat_multiply(quat_exp(correction[6:9]), self.orientation)
+        )
+        self.angular_velocity = self.angular_velocity + correction[9:12]
+
+        identity = np.eye(12, dtype=float)
+        ikh = identity - kalman_gain @ h
+        self.covariance = ikh @ self.covariance @ ikh.T + kalman_gain @ r @ kalman_gain.T
+        self.covariance = 0.5 * (self.covariance + self.covariance.T)
+
+        if not self._orientation_z_safe():
+            self._restore(snap)
+            return False
+        return True
+
+    def update_depth(self, z_meas):
+        """1-D update of world-frame z (depth) from an absolute depth sensor.
+
+        ``z_meas`` must already be expressed in the filter's world frame (same
+        convention/units as mocap z), i.e. any sensor offset/scale has been
+        applied by the caller.
+        """
+        if not self.initialized or self.depth_std is None or self.depth_std <= 0.0:
+            return False
+
+        residual_scalar = float(z_meas) - float(self.position[2])
+        innovation_m = abs(residual_scalar)
+        if not self._within_gate(innovation_m, self.max_depth_innovation_m):
+            return False
+
+        snap = self._snapshot()
+
+        residual = np.array([residual_scalar], dtype=float)
+        h = np.zeros((1, 12), dtype=float)
+        h[0, 2] = 1.0
+        r = np.array([[self.depth_std**2]], dtype=float)
+
+        pht = self.covariance @ h.T
+        s = h @ pht + r
+        kalman_gain = pht @ np.linalg.inv(s)
+        correction = kalman_gain @ residual
+
+        self.position = self.position + correction[0:3]
+        self.linear_velocity = self.linear_velocity + correction[3:6]
+        self.orientation = quat_normalize(
+            quat_multiply(quat_exp(correction[6:9]), self.orientation)
+        )
+        self.angular_velocity = self.angular_velocity + correction[9:12]
+
+        identity = np.eye(12, dtype=float)
+        ikh = identity - kalman_gain @ h
+        self.covariance = ikh @ self.covariance @ ikh.T + kalman_gain @ r @ kalman_gain.T
+        self.covariance = 0.5 * (self.covariance + self.covariance.T)
+
+        if not self._orientation_z_safe():
+            self._restore(snap)
+            return False
+        return True
+
+    def update_zero_roll_prior(self, roll_prior_std=None):
+        """Soft prior that roll (rotation about body x-axis) is ~0.
+
+        Applied as a recurring pseudo-measurement: the z-component of the body
+        y-axis expressed in world equals cos(pitch)*sin(roll), which is driven
+        toward 0. A smaller ``roll_prior_std`` makes the prior stronger; values
+        <= 0 (or None) disable it.
+        """
+        if roll_prior_std is None:
+            roll_prior_std = self.roll_prior_std
+        if not self.initialized or roll_prior_std is None or roll_prior_std <= 0.0:
+            return False
+
+        rotation = quat_to_rotation_matrix(self.orientation)
+        body_y_in_world = rotation[:, 1]
+        # h(x) = z-component of body y-axis = cos(pitch)*sin(roll); target is 0.
+        residual = np.array([0.0 - body_y_in_world[2]], dtype=float)
+
+        h = np.zeros((1, 12), dtype=float)
+        # d(e_z^T R e_y)/d(delta_theta_world) = (R e_y) x e_z
+        h[0, 6:9] = np.cross(body_y_in_world, np.array([0.0, 0.0, 1.0]))
+        r = np.array([[roll_prior_std**2]], dtype=float)
+
+        snap = self._snapshot()
+
+        pht = self.covariance @ h.T
+        s = h @ pht + r
+        kalman_gain = pht @ np.linalg.inv(s)
+        correction = kalman_gain @ residual
+
+        self.position = self.position + correction[0:3]
+        self.linear_velocity = self.linear_velocity + correction[3:6]
+        self.orientation = quat_normalize(
+            quat_multiply(quat_exp(correction[6:9]), self.orientation)
+        )
+        self.angular_velocity = self.angular_velocity + correction[9:12]
+
+        identity = np.eye(12, dtype=float)
+        ikh = identity - kalman_gain @ h
+        self.covariance = ikh @ self.covariance @ ikh.T + kalman_gain @ r @ kalman_gain.T
+        self.covariance = 0.5 * (self.covariance + self.covariance.T)
+
+        if not self._orientation_z_safe():
+            self._restore(snap)
+            return False
+        return True
+
+    def _snapshot(self):
+        return (
+            self.position.copy(),
+            self.linear_velocity.copy(),
+            self.orientation.copy(),
+            self.angular_velocity.copy(),
+            self.covariance.copy(),
+        )
+
+    def _restore(self, snapshot, orientation_only=False):
+        if orientation_only:
+            self.orientation = snapshot[2]
+            self.angular_velocity = snapshot[3]
+        else:
+            self.position = snapshot[0]
+            self.linear_velocity = snapshot[1]
+            self.orientation = snapshot[2]
+            self.angular_velocity = snapshot[3]
+            self.covariance = snapshot[4]
+
+    def _orientation_z_safe(self):
+        if self.max_base_link_z_axis_angle_rad is None or self.max_base_link_z_axis_angle_rad <= 0.0:
+            return True
+        return base_link_z_axis_angle_rad(self.orientation) <= self.max_base_link_z_axis_angle_rad
+
+    @staticmethod
+    def _within_gate(value, limit):
+        return limit is None or limit <= 0.0 or value <= limit
+
+    def body_linear_velocity(self):
+        return quat_to_rotation_matrix(self.orientation).T @ self.linear_velocity
+
+    def body_angular_velocity(self):
+        return quat_to_rotation_matrix(self.orientation).T @ self.angular_velocity
+
+
+class BrovEKFOdom(Node):
+    def __init__(self):
+        super().__init__("brov_odom_ekf")
+
+        self.declare_parameter("pose_topic", "/mocap/mr_pinchy/pose")
+        self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_ekf")
+        self.declare_parameter("imu_topic", "/dvl/imu")
+        self.declare_parameter("parent_frame", "mocap")
+        self.declare_parameter("child_frame", "mr_pinchy/base_link_ekf")
+        self.declare_parameter("child_frame_flu", "mr_pinchy/base_link_ekf_flu")
+        self.declare_parameter("publish_rate_hz", 80.0)
+        self.declare_parameter("publish_tf", True)
+        self.declare_parameter("use_imu_gyro", True)
+        self.declare_parameter("dvl_topic", "/dvl/velocity")
+        self.declare_parameter("use_dvl", True)
+        self.declare_parameter("mocap_reset_timeout_sec", 5.0)
+        self.declare_parameter("sensor_timeout_sec", 1.0)
+        self.declare_parameter("roll_prior_std", 0.1)
+        self.declare_parameter("use_rel_alt", True)
+        self.declare_parameter("rel_alt_topic", "/mavros/global_position/rel_alt")
+        self.declare_parameter("rel_alt_std", 0.1)
+        self.declare_parameter("max_rel_alt_innovation_m", 1.0)
+        # World z = rel_alt_scale * rel_alt + rel_alt_offset. Scale -1 because
+        # mocap/world z is positive-down (deeper = larger z) while rel_alt is
+        # positive-up (deeper = more negative), so they move oppositely.
+        # rel_alt_offset is auto-calibrated from accepted mocap when set to NaN;
+        # provide a finite value to pin it manually.
+        self.declare_parameter("rel_alt_scale", -1.0)
+        self.declare_parameter("rel_alt_offset", float("nan"))
+
+        self._pose_topic = str(self.get_parameter("pose_topic").value)
+        self._odom_topic = str(self.get_parameter("odom_topic").value)
+        self._imu_topic = str(self.get_parameter("imu_topic").value)
+        self._parent_frame = str(self.get_parameter("parent_frame").value)
+        self._child_frame = str(self.get_parameter("child_frame").value)
+        self._child_frame_flu = str(self.get_parameter("child_frame_flu").value)
+        self._publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
+        self._publish_tf = bool(self.get_parameter("publish_tf").value)
+        self._use_imu_gyro = bool(self.get_parameter("use_imu_gyro").value)
+        self._dvl_topic = str(self.get_parameter("dvl_topic").value)
+        self._use_dvl = bool(self.get_parameter("use_dvl").value)
+        self._mocap_reset_timeout_sec = float(
+            self.get_parameter("mocap_reset_timeout_sec").value
+        )
+        self._sensor_timeout_sec = float(
+            self.get_parameter("sensor_timeout_sec").value
+        )
+        self._roll_prior_std = float(self.get_parameter("roll_prior_std").value)
+        self._use_rel_alt = bool(self.get_parameter("use_rel_alt").value)
+        self._rel_alt_topic = str(self.get_parameter("rel_alt_topic").value)
+        self._rel_alt_std = float(self.get_parameter("rel_alt_std").value)
+        self._max_rel_alt_innovation_m = float(
+            self.get_parameter("max_rel_alt_innovation_m").value
+        )
+        self._rel_alt_scale = float(self.get_parameter("rel_alt_scale").value)
+        rel_alt_offset_param = float(self.get_parameter("rel_alt_offset").value)
+        self._rel_alt_offset_auto = math.isnan(rel_alt_offset_param)
+        self._rel_alt_offset = None if self._rel_alt_offset_auto else rel_alt_offset_param
+        self._rel_alt_offset_lpf_alpha = 0.02
+        self._latest_rel_alt = None
+        self._latest_rel_alt_sec = None
+
+        self._filter = QuaternionCvEkf(
+            depth_std=self._rel_alt_std,
+            max_depth_innovation_m=self._max_rel_alt_innovation_m,
+            roll_prior_std=self._roll_prior_std,
+        )
+        self._last_filter_sec = None
+        self._last_pose_rx_sec = None
+        self._last_pose_accepted_sec = None
+        self._last_sensor_accepted_sec = None
+        self._consecutive_full_rejections = 0
+        self._publishing_paused = False
+
+        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        self._odom_pub = self.create_publisher(Odometry, self._odom_topic, qos)
+        self.create_subscription(PoseStamped, self._pose_topic, self._pose_cb, qos)
+        if self._use_imu_gyro:
+            self.create_subscription(Imu, self._imu_topic, self._imu_cb, qos)
+        if self._use_dvl:
+            self.create_subscription(
+                TwistWithCovarianceStamped, self._dvl_topic, self._dvl_cb, qos,
+            )
+        if self._use_rel_alt:
+            self.create_subscription(
+                Float64, self._rel_alt_topic, self._rel_alt_cb, qos,
+            )
+        self._tf_broadcaster = TransformBroadcaster(self) if self._publish_tf else None
+        self._static_tf_broadcaster = StaticTransformBroadcaster(self)
+        # self._publish_static_body_frames()
+
+        self.create_timer(1.0 / self._publish_rate_hz, self._tick)
+        self._static_tf_timer = self.create_timer(1, self._publish_static_body_frames_once)
+
+        # self.create_timer(1.0, self._print_vel)
+        self.get_logger().info(
+            f"brov_odom_ekf: pose='{self._pose_topic}', odom='{self._odom_topic}', "
+            f"imu='{self._imu_topic}', use_imu_gyro={self._use_imu_gyro}, "
+            f"dvl='{self._dvl_topic}', use_dvl={self._use_dvl}, "
+            f"parent_frame='{self._parent_frame}', child_frame='{self._child_frame}', "
+            f"rate={self._publish_rate_hz:.1f}Hz, publish_tf={self._publish_tf}, "
+            f"max_position_innovation={self._filter.max_position_innovation_m:.3f}m, "
+            f"max_orientation_innovation={self._filter.max_orientation_innovation_rad:.3f}rad, "
+            f"max_base_link_z_axis_angle={self._filter.max_base_link_z_axis_angle_rad:.3f}rad, "
+            f"gyro_std={self._filter.gyro_std:.3f}rad/s, "
+            f"max_gyro_innovation={self._filter.max_gyro_innovation_rad_s:.3f}rad/s, "
+            f"dvl_std={self._filter.dvl_std:.3f}m/s, "
+            f"max_dvl_innovation={self._filter.max_dvl_innovation_m_s:.3f}m/s, "
+            f"mocap_reset_timeout={self._mocap_reset_timeout_sec:.2f}s, "
+            f"sensor_timeout={self._sensor_timeout_sec:.2f}s, "
+            f"roll_prior_std={self._roll_prior_std:.3f}rad, "
+            f"use_rel_alt={self._use_rel_alt}, rel_alt='{self._rel_alt_topic}', "
+            f"rel_alt_std={self._rel_alt_std:.3f}m, "
+            f"max_rel_alt_innovation={self._max_rel_alt_innovation_m:.3f}m, "
+            f"rel_alt_scale={self._rel_alt_scale:.3f}, "
+            f"rel_alt_offset={'auto' if self._rel_alt_offset_auto else f'{self._rel_alt_offset:.3f}m'}, "
+        )
+    
+    def _now_sec(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def _print_vel(self):
+        linear_body = self._filter.body_linear_velocity()
+        angular_body = self._filter.body_angular_velocity()
+        self.get_logger().info(
+            f"Linear velocity: {linear_body}, Angular velocity: {angular_body}",
+        )
+    
+    def _publish_static_body_frames_once(self) -> None:
+        stamp = self.get_clock().now().to_msg()
+
+        transform = TransformStamped()
+        transform.header.stamp = stamp
+        transform.header.frame_id = self._child_frame
+        transform.child_frame_id = self._child_frame_flu
+        transform.transform.translation.x = 0.0
+        transform.transform.translation.y = 0.0
+        transform.transform.translation.z = 0.0
+        # FRD -> FLU is a 180 degree rotation about +X with coincident origins.
+        transform.transform.rotation.x = 1.0
+        transform.transform.rotation.y = 0.0
+        transform.transform.rotation.z = 0.0
+        transform.transform.rotation.w = 0.0
+        sonar_transform = TransformStamped()
+        sonar_transform.header.stamp = stamp
+        sonar_transform.header.frame_id = self._child_frame
+        sonar_transform.child_frame_id = "mr_pinchy/sonar_link_ekf"
+        sonar_transform.transform.translation.x = 0.220
+        sonar_transform.transform.translation.y = 0.0
+        sonar_transform.transform.translation.z = -0.160
+        sonar_transform.transform.rotation.x = 0.0
+        sonar_transform.transform.rotation.y = -0.259
+        sonar_transform.transform.rotation.z = 0.0
+        sonar_transform.transform.rotation.w = 0.966
+        dvl_transform = TransformStamped()
+        dvl_transform.header.stamp = stamp
+        dvl_transform.header.frame_id = self._child_frame
+        dvl_transform.child_frame_id = "mr_pinchy/dvl_link"
+        dvl_transform.transform.translation.x = 0.002
+        dvl_transform.transform.translation.y = -0.106
+        dvl_transform.transform.translation.z = 0.141
+        dvl_transform.transform.rotation.x = 0.0
+        dvl_transform.transform.rotation.y = 0.0
+        dvl_transform.transform.rotation.z = 0.0
+        dvl_transform.transform.rotation.w = 1.0
+        self._static_tf_broadcaster.sendTransform([transform, sonar_transform, dvl_transform])
+
+
+    def _pose_cb(self, msg):
+        now = self._now_sec()
+        position = np.array(
+            [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z],
+            dtype=float,
+        )
+        orientation = np.array(
+            [
+                msg.pose.orientation.x,
+                msg.pose.orientation.y,
+                msg.pose.orientation.z,
+                msg.pose.orientation.w,
+            ],
+            dtype=float,
+        )
+
+        accepted = self._filter.update(
+            position,
+            orientation,
+        )
+        if accepted:
+            self._last_pose_accepted_sec = now
+            self._last_sensor_accepted_sec = now
+            self._calibrate_rel_alt_offset(position[2], now)
+        else:
+            self.get_logger().warn(
+                "Mocap measurement rejected.",
+                throttle_duration_sec=1.0,
+            )
+            if self._should_reset_from_mocap(now) and self._filter.orientation_meas_safe(
+                orientation
+            ):
+                self._reset_filter_from_mocap(position, orientation, now)
+
+        if self._last_filter_sec is None:
+            self._last_filter_sec = now
+        self._last_pose_rx_sec = now
+
+        frame_id = msg.header.frame_id
+        if frame_id and frame_id != self._parent_frame:
+            self.get_logger().warn(
+                f"Received pose in frame '{frame_id}', publishing odom in '{self._parent_frame}'.",
+                throttle_duration_sec=2.0,
+            )
+
+    def _should_reset_from_mocap(self, now) -> bool:
+        if self._mocap_reset_timeout_sec <= 0.0:
+            return False
+        if not self._filter.initialized or self._last_pose_accepted_sec is None:
+            return False
+        return (now - self._last_pose_accepted_sec) > self._mocap_reset_timeout_sec
+
+    def _reset_filter_from_mocap(self, position, orientation, now) -> None:
+        elapsed = now - self._last_pose_accepted_sec
+        self._filter = self._filter.reset_copy()
+        self._filter.initialize(position, orientation)
+        self._last_pose_accepted_sec = now
+        self._last_sensor_accepted_sec = now
+        self._last_filter_sec = now
+        self._imu_gyro_lpf = None
+        self.get_logger().warn(
+            f"No mocap measurement accepted for {elapsed:.2f}s; "
+            "reset EKF from fresh mocap measurement.",
+        )
+
+    def _imu_cb(self, msg):
+        if not self._use_imu_gyro or not self._filter.initialized:
+            return
+
+        raw_angular_velocity = np.array(
+            [
+                msg.angular_velocity.x,
+                msg.angular_velocity.y,
+                msg.angular_velocity.z,
+            ],
+            dtype=float,
+        )
+        alpha = 0.8
+        previous = getattr(self, "_imu_gyro_lpf", None)
+        if previous is None:
+            filtered_angular_velocity = raw_angular_velocity
+        else:
+            filtered_angular_velocity = (
+                alpha * raw_angular_velocity + (1.0 - alpha) * previous
+            )
+        self._imu_gyro_lpf = filtered_angular_velocity
+
+        accepted = self._filter.update_body_angular_velocity(filtered_angular_velocity)
+        if accepted:
+            self._last_sensor_accepted_sec = self._now_sec()
+        else:
+            self.get_logger().warn(
+                "Rejected IMU gyro outlier: "
+                f"max_gyro_innovation={self._filter.max_gyro_innovation_rad_s:.3f}rad/s",
+                throttle_duration_sec=1.0,
+            )
+
+    def _dvl_cb(self, msg):
+        if not self._use_dvl or not self._filter.initialized:
+            return
+
+        linear_velocity_body = np.array(
+            [
+                msg.twist.twist.linear.x,
+                msg.twist.twist.linear.y,
+                msg.twist.twist.linear.z,
+            ],
+            dtype=float,
+        )
+        accepted = self._filter.update_body_linear_velocity(linear_velocity_body)
+        if accepted:
+            self._last_sensor_accepted_sec = self._now_sec()
+        else:
+            self.get_logger().warn(
+                "Rejected DVL velocity outlier: "
+                f"max_dvl_innovation={self._filter.max_dvl_innovation_m_s:.3f}m/s",
+                throttle_duration_sec=1.0,
+            )
+
+    def _calibrate_rel_alt_offset(self, mocap_z, now) -> None:
+        """Track world_z - scale*rel_alt from fresh, accepted mocap.
+
+        Only runs in auto mode; with a manual offset the param value is used
+        as-is. The offset is frozen at its last value once mocap drops, so
+        rel_alt keeps z bounded during dead-reckoning.
+        """
+        if not self._use_rel_alt or not self._rel_alt_offset_auto:
+            return
+        if self._latest_rel_alt is None or self._latest_rel_alt_sec is None:
+            return
+        if (now - self._latest_rel_alt_sec) > self._sensor_timeout_sec:
+            return
+        measured_offset = float(mocap_z) - self._rel_alt_scale * self._latest_rel_alt
+        if self._rel_alt_offset is None:
+            self._rel_alt_offset = measured_offset
+            self.get_logger().info(
+                f"Calibrated rel_alt offset: {self._rel_alt_offset:.3f}m "
+                f"(mocap_z={mocap_z:.3f}, rel_alt={self._latest_rel_alt:.3f})."
+            )
+        else:
+            alpha = self._rel_alt_offset_lpf_alpha
+            self._rel_alt_offset = (
+                (1.0 - alpha) * self._rel_alt_offset + alpha * measured_offset
+            )
+
+    def _rel_alt_cb(self, msg):
+        now = self._now_sec()
+        self._latest_rel_alt = float(msg.data)
+        self._latest_rel_alt_sec = now
+
+        if not self._use_rel_alt or not self._filter.initialized:
+            return
+        if self._rel_alt_offset is None:
+            # No offset yet; wait for the first accepted mocap to calibrate.
+            return
+
+        z_meas = self._rel_alt_scale * self._latest_rel_alt + self._rel_alt_offset
+        accepted = self._filter.update_depth(z_meas)
+        if accepted:
+            self._last_sensor_accepted_sec = now
+        else:
+            self.get_logger().warn(
+                "Rejected rel_alt depth outlier: "
+                f"max_rel_alt_innovation={self._max_rel_alt_innovation_m:.3f}m",
+                throttle_duration_sec=1.0,
+            )
+
+    def _sensors_timed_out(self, now) -> bool:
+        if self._sensor_timeout_sec <= 0.0:
+            return False
+        if self._last_sensor_accepted_sec is None:
+            return True
+        return (now - self._last_sensor_accepted_sec) > self._sensor_timeout_sec
+
+    def _tick(self):
+        if not self._filter.initialized or self._last_pose_rx_sec is None:
+            return
+        now = self._now_sec()
+
+        if self._sensors_timed_out(now):
+            elapsed = (
+                now - self._last_sensor_accepted_sec
+                if self._last_sensor_accepted_sec is not None
+                else float("inf")
+            )
+            self.get_logger().warn(
+                f"No sensor measurement accepted for {elapsed:.2f}s "
+                f"(> {self._sensor_timeout_sec:.2f}s); pausing odom/tf publishing.",
+                throttle_duration_sec=1.0,
+            )
+            self._publishing_paused = True
+            self._last_filter_sec = now
+            return
+
+        if self._publishing_paused:
+            self.get_logger().info("Sensor measurements resumed; publishing odom/tf.")
+            self._publishing_paused = False
+
+        dt = now - self._last_filter_sec if self._last_filter_sec is not None else 0.0
+        self._filter.predict(dt)
+        self._filter.update_zero_roll_prior()
+        self._last_filter_sec = now
+
+        stamp = self.get_clock().now().to_msg()
+        odom_msg = self._odom_message(stamp)
+        self._odom_pub.publish(odom_msg)
+        if self._tf_broadcaster is not None:
+            self._tf_broadcaster.sendTransform(self._transform_message(stamp))
+
+    def _odom_message(self, stamp):
+        msg = Odometry()
+        msg.header.stamp = stamp
+        msg.header.frame_id = self._parent_frame
+        msg.child_frame_id = self._child_frame
+
+        msg.pose.pose.position.x = float(self._filter.position[0])
+        msg.pose.pose.position.y = float(self._filter.position[1])
+        msg.pose.pose.position.z = float(self._filter.position[2])
+        msg.pose.pose.orientation.x = float(self._filter.orientation[0])
+        msg.pose.pose.orientation.y = float(self._filter.orientation[1])
+        msg.pose.pose.orientation.z = float(self._filter.orientation[2])
+        msg.pose.pose.orientation.w = float(self._filter.orientation[3])
+
+        linear_body = self._filter.body_linear_velocity()
+        angular_body = self._filter.body_angular_velocity()
+        msg.twist.twist.linear.x = float(linear_body[0])
+        msg.twist.twist.linear.y = float(linear_body[1])
+        msg.twist.twist.linear.z = float(linear_body[2])
+        msg.twist.twist.angular.x = float(angular_body[0])
+        msg.twist.twist.angular.y = float(angular_body[1])
+        msg.twist.twist.angular.z = float(angular_body[2])
+
+        if hasattr(msg.pose, "covariance"):
+            pose_cov = np.zeros((6, 6), dtype=float)
+            pose_cov[0:3, 0:3] = self._filter.covariance[0:3, 0:3]
+            pose_cov[3:6, 3:6] = self._filter.covariance[6:9, 6:9]
+            msg.pose.covariance = pose_cov.reshape(-1).tolist()
+        if hasattr(msg.twist, "covariance"):
+            twist_cov = np.zeros((6, 6), dtype=float)
+            twist_cov[0:3, 0:3] = self._filter.covariance[3:6, 3:6]
+            twist_cov[3:6, 3:6] = self._filter.covariance[9:12, 9:12]
+            msg.twist.covariance = twist_cov.reshape(-1).tolist()
+
+        return msg
+
+    def _transform_message(self, stamp):
+        msg = TransformStamped()
+        msg.header.stamp = stamp
+        msg.header.frame_id = self._parent_frame
+        msg.child_frame_id = self._child_frame
+        msg.transform.translation.x = float(self._filter.position[0])
+        msg.transform.translation.y = float(self._filter.position[1])
+        msg.transform.translation.z = float(self._filter.position[2])
+        msg.transform.rotation.x = float(self._filter.orientation[0])
+        msg.transform.rotation.y = float(self._filter.orientation[1])
+        msg.transform.rotation.z = float(self._filter.orientation[2])
+        msg.transform.rotation.w = float(self._filter.orientation[3])
+        return msg
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = BrovEKFOdom()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
