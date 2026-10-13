@@ -32,11 +32,14 @@ class BrovTwistSimpleController(Node):
         self.declare_parameter("odom_topic", "/mocap/mr_pinchy/odom_ekf")
         self.declare_parameter("manual_control_topic", "/mavros/manual_control/send")
         self.declare_parameter("base_link_frame", "mr_pinchy/base_link_ekf")
+        # The tank box below is in the mocap frame; disable when odometry carries no pose.
+        self.declare_parameter("enable_tank_check", True)
 
         cmd_topic = str(self.get_parameter("cmd_topic").value)
         odom_topic = str(self.get_parameter("odom_topic").value)
         mc_topic = str(self.get_parameter("manual_control_topic").value)
         self._base_link_frame = normalize_tf_frame_id(self.get_parameter("base_link_frame").value)
+        self._enable_tank_check = bool(self.get_parameter("enable_tank_check").value)
 
         self._debug_log = False
         self._publish_rate_hz = 50.0
@@ -202,7 +205,9 @@ class BrovTwistSimpleController(Node):
 
         # Tank range safety check
         pos = self._get_position(self._last_odom)
-        if np.any(pos < self._tank_range[0]) or np.any(pos > self._tank_range[1]):
+        if self._enable_tank_check and (
+            np.any(pos < self._tank_range[0]) or np.any(pos > self._tank_range[1])
+        ):
             self._reset_pid()
             self._publish_neutral()
             self.get_logger().warn(
