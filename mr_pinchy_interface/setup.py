@@ -46,6 +46,7 @@ setup(
             'brov_odom_ekf_ros2 = mr_pinchy_interface.brov_odom_ekf_ros2:main',
             'sonar_filter = mr_pinchy_interface.sonar_filter:main',
             'overlay_rviz = mr_pinchy_interface.overlay_rviz:main',
+            'marker_recolor = mr_pinchy_interface.marker_recolor:main',
         ],
     },
 )
