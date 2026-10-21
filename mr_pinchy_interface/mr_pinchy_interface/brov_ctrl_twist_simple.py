@@ -42,7 +42,7 @@ class BrovTwistSimpleController(Node):
         self._enable_tank_check = bool(self.get_parameter("enable_tank_check").value)
 
         self._debug_log = False
-        self._publish_rate_hz = 50.0
+        self._publish_rate_hz = 20.0
         self._odom_timeout_sec = 0.3
         self._tf_timeout = Duration(seconds=0.05)
         self._cmd_timeout_sec = 0.3

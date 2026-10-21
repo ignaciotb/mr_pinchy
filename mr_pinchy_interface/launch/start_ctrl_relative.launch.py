@@ -24,7 +24,7 @@ SONAR_FRAME = "mr_pinchy/sonar_link_ekf"
 def generate_launch_description() -> LaunchDescription:
     rviz_config_arg = DeclareLaunchArgument(
         "rviz_config",
-        default_value=PathJoinSubstitution(
+    default_value=PathJoinSubstitution(
             [FindPackageShare("mr_pinchy_interface"), "rviz", "relative.rviz"]
         ),
         description="Absolute path to RViz config file",
@@ -81,7 +81,7 @@ def generate_launch_description() -> LaunchDescription:
             "axis_linear.y": 0, "scale_linear.y": 0.2,                                 # sway, left stick X
             "axis_linear.z": 4, "scale_linear.z": 0.2,                                 # heave, right stick Y
             "axis_angular.yaw": 3, "scale_angular.yaw": 0.3,                           # yaw, right stick X
-            "enable_button": 5, "require_enable_button": True,                         # deadman on RB
+            "enable_button": 4, "require_enable_button": True,                         # deadman on LB
             "publish_stamped_twist": True,
             "frame": "mr_pinchy/base_link_ekf_flu",
         }],

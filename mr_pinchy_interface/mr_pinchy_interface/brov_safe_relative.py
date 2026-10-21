@@ -11,10 +11,11 @@ Outputs:
   /mr_pinchy/odom_dvl        Odometry (twist only)  DVL + gyro repacked for brov_ctrl_twist_simple
   static TF                  base_link_ekf -> base_link_ekf_flu / sonar_link_ekf / dvl_link
 
-A RelativeKF tracks the nearest sonar cluster as one circular obstacle, and a
-CBF-QP keeps the robot circle outside the obstacle circle. Heave and yaw rate
-pass through unchanged. No global pose is used anywhere; the odometry message
-carries body velocity only (pose stays identity). See doc/relative_safety_filter.md.
+The environment is assumed static: every sonar point is an obstacle. A soft-min
+barrier over all points (JAX) gives one CBF half-plane, and a CBF-QP keeps the robot
+circle clear of the points. Heave and yaw rate pass through unchanged. No global pose
+is used anywhere; the odometry message carries body velocity only (pose stays
+identity). See doc/relative_safety_filter.md.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ import math
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import Point, TransformStamped, TwistStamped, TwistWithCovarianceStamped
+from geometry_msgs.msg import TransformStamped, TwistStamped, TwistWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.duration import Duration
 from rclpy.node import Node
@@ -31,12 +32,7 @@ from std_msgs.msg import Float64MultiArray
 from tf2_ros import Buffer, StaticTransformBroadcaster, TransformException, TransformListener
 from visualization_msgs.msg import Marker
 
-from mr_pinchy_interface.brov_safe_relative_core import (
-    CbfQp,
-    RelativeKF,
-    cbf_constraint,
-    nearest_cluster_centroid,
-)
+from mr_pinchy_interface.brov_safe_relative_core import CbfQp, SoftminCbf
 from mr_pinchy_interface.brov_utils import quat_to_rotation_matrix
 
 
@@ -75,58 +71,46 @@ class SafeRelativeNode(Node):
         self.declare_parameter("odom_topic", "/mr_pinchy/odom_dvl")
         self.declare_parameter("publish_static_tf", True)
         # Geometry / CBF
-        self.declare_parameter("robot_radius", 0.5)
-        self.declare_parameter("obstacle_radius", 0.3)
+        self.declare_parameter("robot_radius", 0.6)
         self.declare_parameter("margin", 0.1)
         self.declare_parameter("alpha", 1.0)
-        self.declare_parameter("v_obs_max", 0.5)  # clip of the estimated obstacle speed used in the constraint
+        self.declare_parameter("kappa", 50.0)  # soft-min sharpness; h is below min_i h_i by <= log(N)/kappa
+        self.declare_parameter("max_points", 2048)  # nearest points kept (fixed JAX array size)
         self.declare_parameter("v_max", 0.3)
         self.declare_parameter("slack_weight", 1000.0)
+        self.declare_parameter("smooth_weight", 1.0)  # penalty on |u - u_prev|^2, damps jitter
         # Timing
         self.declare_parameter("rate_hz", 30.0)
         self.declare_parameter("cmd_timeout_sec", 0.3)
         self.declare_parameter("sensor_timeout_sec", 0.5)
         self.declare_parameter("obstacle_lost_timeout_sec", 1.0)
-        # Obstacle detection
-        self.declare_parameter("cluster_eps", 0.1)
-        self.declare_parameter("min_cluster_pts", 10)
+        # Obstacle points
         self.declare_parameter("max_range", 3.0)
         self.declare_parameter("max_abs_z", 1.0)
-        # KF noise
-        self.declare_parameter("kf_q_pos", 0.01)
-        self.declare_parameter("kf_q_vel", 0.1)
-        self.declare_parameter("kf_r_meas", 0.1)
 
         g = lambda name: self.get_parameter(name).value  # noqa: E731
         self._flu_frame = normalize_tf_frame_id(g("base_link_flu_frame"))
         self._frd_frame = normalize_tf_frame_id(g("base_link_frd_frame"))
         self._robot_radius = float(g("robot_radius"))
-        self._obstacle_radius = float(g("obstacle_radius"))
-        self._d_safe = self._robot_radius + self._obstacle_radius + float(g("margin"))
-        self._alpha = float(g("alpha"))
-        self._v_obs_max = float(g("v_obs_max"))
+        self._d_safe = self._robot_radius + float(g("margin"))
         self._cmd_timeout = float(g("cmd_timeout_sec"))
         self._sensor_timeout = float(g("sensor_timeout_sec"))
         self._lost_timeout = float(g("obstacle_lost_timeout_sec"))
-        self._cluster_eps = float(g("cluster_eps"))
-        self._min_cluster_pts = int(g("min_cluster_pts"))
         self._max_range = float(g("max_range"))
         self._max_abs_z = float(g("max_abs_z"))
 
-        self._kf = RelativeKF(float(g("kf_q_pos")), float(g("kf_q_vel")), float(g("kf_r_meas")))
-        self._qp = CbfQp(float(g("v_max")), float(g("slack_weight")))
+        self._cbf = SoftminCbf(self._d_safe, float(g("alpha")), float(g("kappa")), int(g("max_points")))
+        self._qp = CbfQp(float(g("v_max")), float(g("slack_weight")), float(g("smooth_weight")))
+        self._u_prev = np.zeros(2)  # last published xy command (QP smoothing term)
 
         # Latest inputs and their receive times
         self._cmd: TwistStamped | None = None
         self._cmd_sec = -math.inf
-        self._v_robot = np.zeros(2)
         self._dvl: TwistWithCovarianceStamped | None = None
         self._dvl_sec = -math.inf
         self._gyro = np.zeros(3)
-        self._omega = 0.0
-        self._imu_sec = -math.inf
-        self._meas_sec = -math.inf  # last accepted obstacle measurement
-        self._tick_sec: float | None = None
+        self._points = np.zeros((0, 2))  # obstacle points in body FLU xy
+        self._meas_sec = -math.inf  # last non-empty cloud
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -138,7 +122,6 @@ class SafeRelativeNode(Node):
             self._static_tf = StaticTransformBroadcaster(self)
             self._static_tf.sendTransform(self._static_body_frames())
         self._robot_marker_pub = self.create_publisher(Marker, "/safety_filter/robot_marker", 10)
-        self._obs_marker_pub = self.create_publisher(Marker, "/safety_filter/obstacle_marker", 10)
         self._debug_pub = self.create_publisher(Float64MultiArray, "/safety_filter/debug", 10)
 
         self.create_subscription(TwistStamped, str(g("input_cmd_topic")), self._cmd_cb, 10)
@@ -148,7 +131,7 @@ class SafeRelativeNode(Node):
         self.create_timer(1.0 / float(g("rate_hz")), self._tick)
 
         self.get_logger().info(
-            f"safety_filter ready: d_safe={self._d_safe:.2f} m, alpha={self._alpha}, "
+            f"safety_filter ready: d_safe={self._d_safe:.2f} m, alpha={g('alpha')}, kappa={g('kappa')}, "
             f"v_max={float(g('v_max'))}, cloud='{g('cloud_topic')}'"
         )
 
@@ -161,17 +144,12 @@ class SafeRelativeNode(Node):
         self._cmd_sec = self._now()
 
     def _dvl_cb(self, msg: TwistWithCovarianceStamped) -> None:
-        # dvl_link is FRD and aligned with the body; FLU flips y.
-        v = msg.twist.twist.linear
-        self._v_robot = np.array([v.x, -v.y])
         self._dvl = msg
         self._dvl_sec = self._now()
 
     def _imu_cb(self, msg: Imu) -> None:
         w = msg.angular_velocity
         self._gyro = np.array([w.x, w.y, w.z])
-        self._omega = -w.z  # FRD z-down -> FLU z-up
-        self._imu_sec = self._now()
 
     def _static_body_frames(self) -> list[TransformStamped]:
         """Body-fixed frames (same numbers as brov_odom_ekf): FRD base -> FLU base,
@@ -227,56 +205,35 @@ class SafeRelativeNode(Node):
         R, t = tf
         pts = (R @ cloud_to_xyz(msg).T).T + t
         keep = (np.linalg.norm(pts, axis=1) <= self._max_range) & (np.abs(pts[:, 2]) <= self._max_abs_z)
-        z = nearest_cluster_centroid(pts[keep][:, :2], self._cluster_eps, self._min_cluster_pts)
-        if z is None:
+        if not keep.any():
             return
-        now = self._now()
-        if self._track_active(now):
-            self._kf.update(z)
-        else:
-            self._kf.reset(z)
-        self._meas_sec = now
+        self._points = pts[keep][:, :2]
+        self._meas_sec = self._now()
 
     # ------------------------------------------------------------------ loop
     def _tick(self) -> None:
         now = self._now()
-        dt = now - self._tick_sec if self._tick_sec is not None else 0.0
-        self._tick_sec = now
         active = self._track_active(now)
-        dvl_fresh = now - self._dvl_sec <= self._sensor_timeout
-        if dvl_fresh:
+        if now - self._dvl_sec <= self._sensor_timeout:
             self._publish_odom()
 
-        if active:
-            v_robot, omega = self._v_robot, self._omega
-            if not dvl_fresh:
-                v_robot = np.zeros(2)
-                self.get_logger().warn("DVL stale; predicting with v_robot=0", throttle_duration_sec=2.0)
-            if now - self._imu_sec > self._sensor_timeout:
-                omega = 0.0
-            self._kf.predict(dt, v_robot, omega)
-
-        self._publish_markers(active)
+        self._publish_robot_marker()
 
         if self._cmd is None or now - self._cmd_sec > self._cmd_timeout:
+            self._u_prev = np.zeros(2)
             return  # deadman released: publish nothing, the twist controller goes neutral
 
         u_ref = np.array([self._cmd.twist.linear.x, self._cmd.twist.linear.y])
-        h, slack = math.nan, 0.0
+        h, slack, n = math.nan, 0.0, np.zeros(2)
         if active:
-            # Clip the KF velocity so a cluster jump (e.g. wall <-> diver) cannot inject a huge
-            # transient speed into the constraint.
-            v_obs = self._kf.v_obs
-            speed = float(np.linalg.norm(v_obs))
-            if speed > self._v_obs_max:
-                v_obs = v_obs * (self._v_obs_max / speed)
-            n, b, h = cbf_constraint(self._kf.p, v_obs, self._d_safe, self._alpha)
-            u, slack = self._qp.solve(u_ref, n, b)
+            n, b, h = self._cbf.constraint(self._points)
+            u, slack = self._qp.solve(u_ref, n, b, self._u_prev)
             if u is None:
                 self.get_logger().warn("CBF-QP failed; commanding zero", throttle_duration_sec=1.0)
                 u = np.zeros(2)
         else:
             u = u_ref
+        self._u_prev = u
 
         out = TwistStamped()
         out.header.stamp = self.get_clock().now().to_msg()
@@ -288,7 +245,7 @@ class SafeRelativeNode(Node):
         self._cmd_pub.publish(out)
 
         dbg = Float64MultiArray()
-        dbg.data = [h, slack, *u_ref, *u, *self._kf.p, *self._kf.v_obs, float(active)]
+        dbg.data = [h, slack, *u_ref, *u, *n, float(self._points.shape[0]), float(active)]
         self._debug_pub.publish(dbg)
 
     # ------------------------------------------------------------------ viz
@@ -303,20 +260,8 @@ class SafeRelativeNode(Node):
         m.color.r, m.color.g, m.color.b, m.color.a = rgba
         return m
 
-    def _publish_markers(self, active: bool) -> None:
+    def _publish_robot_marker(self) -> None:
         self._robot_marker_pub.publish(self._sphere("robot", self._robot_radius, np.zeros(2), (0.2, 0.6, 1.0, 0.35)))
-
-        obs = self._sphere("obstacle", self._obstacle_radius, self._kf.p, (1.0, 0.15, 0.05, 0.45))
-        arrow = Marker()
-        arrow.header, arrow.ns, arrow.id, arrow.type = obs.header, "obstacle", 1, Marker.ARROW
-        arrow.scale.x, arrow.scale.y, arrow.scale.z = 0.03, 0.08, 0.08
-        arrow.color.r, arrow.color.g, arrow.color.b, arrow.color.a = 1.0, 0.5, 0.0, 0.9
-        p, v = self._kf.p, self._kf.v_obs
-        arrow.points = [Point(x=float(p[0]), y=float(p[1])), Point(x=float(p[0] + v[0]), y=float(p[1] + v[1]))]
-        if not active:
-            obs.action = arrow.action = Marker.DELETE
-        self._obs_marker_pub.publish(obs)
-        self._obs_marker_pub.publish(arrow)
 
 
 def main(args=None) -> None:
