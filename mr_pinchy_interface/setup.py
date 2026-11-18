@@ -37,11 +37,12 @@ setup(
     entry_points={
         'console_scripts': [
             'bluerov2_keyboard_teleop = mr_pinchy_interface.bluerov2_keyboard_teleop:main',
-            'brov_ctrl_waypoint_twist = mr_pinchy_interface.brov_ctrl_waypoint_twist:main',
+            'bluerov2_wp_ctrl = mr_pinchy_interface.bluerov2_wp_ctrl:main',
             'brov_ctrl_twist_simple = mr_pinchy_interface.brov_ctrl_twist_simple:main',
             'bluerov2_vel_rc = mr_pinchy_interface.bluerov2_vel_rc:main',
             'brov_odom_ekf = mr_pinchy_interface.brov_odom_ekf:main',
             'sonar_filter = mr_pinchy_interface.sonar_filter:main',
+            'bluerov2_hitl = mr_pinchy_interface.bluerov2_hitl:main',
         ],
     },
 )

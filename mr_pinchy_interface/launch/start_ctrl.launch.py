@@ -29,8 +29,8 @@ def generate_launch_description() -> LaunchDescription:
 
     waypoint_twist_controller = Node(
         package="mr_pinchy_interface",
-        executable="brov_ctrl_waypoint_twist",
-        name="brov_ctrl_waypoint_twist",
+        executable="bluerov2_wp_ctrl",
+        name="bluerov2_wp_ctrl",
         output="screen",
         parameters=[use_sim_time],
     )

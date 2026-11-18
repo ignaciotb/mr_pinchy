@@ -85,7 +85,7 @@ vel_ctrl_keyboard
 For waypoint control, replace the keyboard command with:
 
 ```bash
-ros2 run mr_pinchy_interface brov_ctrl_waypoint_twist
+ros2 run mr_pinchy_interface bluerov2_wp_ctrl
 ```
 
 Remember to comment out the joystick or keyboard command in the launch file if you want to use waypoint control.

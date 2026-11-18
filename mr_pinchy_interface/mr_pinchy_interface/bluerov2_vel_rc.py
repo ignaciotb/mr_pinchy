@@ -81,7 +81,7 @@ class Bluerov2VelRc(Node):
         self.declare_parameter("neutral_pwm", 1500)
         self.declare_parameter("delta_pwm", 100)
         self.declare_parameter("cmd_timeout_sec", 0.4)
-        self.declare_parameter("input_is_flu", True)
+        self.declare_parameter("input_is_flu", True) # True for sim, false for real
         # Velocity that maps to a full delta_pwm deflection. Defaults match the
         # scale_* parameters given to teleop_twist_joy in start_ctrl.launch.py.
         self.declare_parameter("max_linear_x", 0.2)

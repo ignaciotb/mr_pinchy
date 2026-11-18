@@ -1,0 +1,114 @@
+# Parameters for the bluerov2_wp_ctrl waypoint controller (MPC or PID).
+# "/**" matches whatever the node is named at launch -- bluerov2_wp_ctrl_sim,
+# bluerov2_wp_ctrl_real, or a bare bluerov2_wp_ctrl -- so this one file serves
+# every instance. A literal node-name key only takes effect when it matches the
+# runtime name exactly, and a mismatch is silent: the node just runs on its
+# declared defaults. Consequence of the wildcard: sim and real share every
+# value here, so the odom_topic / base_link_frame pair below has to be switched
+# by hand (or overridden per-node in the launch file) when swapping targets.
+# Values here are the node's own defaults; edit rather than re-declare.
+/**:
+  ros__parameters:
+
+    # --- I/O ---
+    # Published by the "Publish Goal" button of the 6-DOF waypoint tool in
+    # bluerov_waypoint_rviz_plugin. Any geometry_msgs/PoseStamped source
+    # works -- set this back to "/goal_pose" for RViz's 2D Goal Pose tool.
+    goal_topic: "/bluerov/goal_pose"
+    map_frame: "map"
+    predicted_path_topic: "~/mpc_predicted_path"
+
+    # --- teleop arbitration ---
+    # teleop_twist_joy publishes onto the same cmd_topic as this node, but only
+    # while its deadman is held (require_enable_button: true in the bringup
+    # launch files). This node watches the SAME button and publishes nothing
+    # while it is down, so the two never fight over the topic. Pressing it also
+    # cancels the current goal, so releasing it leaves the node commanding zero
+    # until a new goal is published on goal_topic. Keep teleop_enable_button
+    # equal to the teleop node's "enable_button" (RB = 5); set it to -1 to drop
+    # the arbitration and always publish.
+    joy_topic: "/joy"
+    teleop_enable_button: 5
+    # joy_node republishes at autorepeat_rate (20 Hz), so silence this long
+    # means the joystick is gone: assume the deadman was released and take the
+    # topic back rather than leaving the vehicle with nobody driving it.
+    joy_timeout_sec: 1.0
+
+    # --- which control law ---
+    # "mpc": convex MPC on x, y, yaw (odom frame); depth left alone.
+    # "pid": per-body-axis PID on all six DOF -- also closes the loop on
+    #        depth and attitude, and needs no QP solver. Roll and pitch only
+    #        reach the vehicle when bluerov2_vel_rc is the velocity backend;
+    #        brov_ctrl_twist_simple drops them.
+    controller: "pid"
+
+    # --- MPC horizon / rate ---
+    horizon: 20           # steps
+    mpc_dt: 0.2           # s per step -> 4 s lookahead
+    # Control (re-solve + publish) frequency; independent of mpc_dt. Warm-
+    # started solves measure ~9ms mean / ~24ms worst, so 30 Hz leaves margin.
+    publish_rate_hz: 30.0
+    odom_timeout: 0.3
+
+    # --- limits (odom frame; isotropic horizontal) ---
+    v_lin_max: 0.15       # m/s on x, y
+    v_heave_max: 0.1      # m/s on z (PID only; the MPC does not command heave)
+    v_roll_max: 0.2       # rad/s (PID only)
+    v_pitch_max: 0.2      # rad/s (PID only)
+    v_yaw_max: 0.3        # rad/s
+    a_lin_max: 0.2        # m/s^2
+    a_yaw_max: 0.5        # rad/s^2, applied to every angular axis
+
+    # --- MPC cost weights ---
+    # Detuned vs. a textbook tracker to avoid near-goal overshoot: stronger
+    # command-rate penalty (rd) and a softer terminal pull (qf_pos) make the
+    # approach gentler so the laggy plant doesn't ring around the setpoint.
+    q_pos: 10.0           # stage position tracking
+    q_yaw: 2.0            # stage yaw tracking
+    qf_pos: 20.0          # terminal position
+    qf_yaw: 10.0          # terminal yaw
+    r_v: 1.0              # linear effort
+    r_w: 1.0              # yaw effort
+    rd_v: 12.0            # linear rate (smoothness)
+    rd_w: 12.0            # yaw rate
+
+    # --- PID gains (error -> velocity), used when controller: "pid" ---
+    # Seeded from brov_ctrl_waypoint_wrench.py on feat/pid, where they
+    # mapped error to normalised thrust. Output units differ here, so
+    # treat these as a starting point and retune. Output limits come from
+    # v_lin_max / v_heave_max / v_yaw_max above, so both controllers stay
+    # inside the same velocity envelope.
+    pid_kp_xy: 3.0
+    pid_ki_xy: 0.0
+    pid_kd_xy: 0.1
+    pid_kp_z: 3.0
+    pid_ki_z: 0.0
+    pid_kd_z: 0.1
+    # Roll/pitch keep the reference's gentler gains -- the BlueROV2 Heavy is
+    # passively stable in both, so these are trim, not primary control.
+    pid_kp_roll: 1.0
+    pid_ki_roll: 0.0
+    pid_kd_roll: 0.0
+    pid_kp_pitch: 1.0
+    pid_ki_pitch: 0.0
+    pid_kd_pitch: 0.0
+    pid_kp_yaw: 3.0
+    pid_ki_yaw: 0.0
+    pid_kd_yaw: 0.1
+    pid_integral_limit_lin: 1.0
+    pid_integral_limit_ang: 1.0
+
+    # --- arrival deadband ---
+    # Within this position+yaw tolerance of the goal, command zero so sensor
+    # noise / tiny model errors can't drive a limit cycle. Re-engages on its
+    # own if the vehicle drifts back outside the band.
+    arrival_pos_tol: 0.1  # m
+    arrival_yaw_tol: 0.1  # rad (~6 deg); also roll/pitch when the PID is active
+
+    # --- tank soft constraints (MPC only, disabled by default) ---
+    # Horizontal (x, y) bounds only. Slack keeps the QP always feasible.
+    enable_tank_constraint: false
+    tank_min: [1.0, -1.8]
+    tank_max: [6.0, 1.8]
+    tank_margin: 0.2
+    tank_slack_weight: 1000.0

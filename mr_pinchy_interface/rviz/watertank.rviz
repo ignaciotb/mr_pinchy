@@ -1,6 +1,6 @@
 Panels:
   - Class: rviz_common/Displays
-    Help Height: 78
+    Help Height: 70
     Name: Displays
     Property Tree Widget:
       Expanded:
@@ -11,10 +11,11 @@ Panels:
         - /TF1/Frames1
         - /TF1/Tree1
         - /sonar_raw_pc1/Topic1
-        - /MarkerArray2
-        - /PointCloud23
-      Splitter Ratio: 0.5447761416435242
-    Tree Height: 1079
+        - /RobotModel2
+        - /Image1/Topic1
+        - /Image3
+      Splitter Ratio: 0.510817289352417
+    Tree Height: 1087
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -32,7 +33,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: PointCloud2
+    SyncSource: ""
 Visualization Manager:
   Class: ""
   Displays:
@@ -62,7 +63,7 @@ Visualization Manager:
         BlueROV2_Heavy/3d_sonar_link:
           Value: false
         BlueROV2_Heavy/base_link:
-          Value: true
+          Value: false
         BlueROV2_Heavy/camera_link:
           Value: false
         BlueROV2_Heavy/camera_tilt_link:
@@ -95,6 +96,8 @@ Visualization Manager:
           Value: false
         KTHTank World/map:
           Value: false
+        KTHTank World/miqus_camera:
+          Value: false
         KTHTank World/mocap:
           Value: false
         KTHTank World/odom:
@@ -103,12 +106,72 @@ Visualization Manager:
           Value: false
         KTHTank World/target_hula:
           Value: false
+        floatsam/base_link:
+          Value: false
+        itrl_rov_1/base_link:
+          Value: false
+        itrl_rov_1/dvl_frame:
+          Value: false
+        itrl_rov_1/sonar_link:
+          Value: false
+        landing_pad_optitrack:
+          Value: false
         map:
+          Value: false
+        miqus_camera:
           Value: true
         mocap:
           Value: true
+        sam/back_prop_link:
+          Value: false
+        sam/base_link:
+          Value: false
+        sam/camera_down_link:
+          Value: false
+        sam/camera_front_left_link:
+          Value: false
+        sam/camera_front_link:
+          Value: false
+        sam/camera_front_right_link:
+          Value: false
+        sam/dvl_link:
+          Value: false
+        sam/front_prop_link:
+          Value: false
+        sam/gps_link:
+          Value: false
+        sam/imu_link:
+          Value: false
+        sam/pressure_link:
+          Value: false
+        sam/sbg_link:
+          Value: false
+        sam/sidescan_link:
+          Value: false
+        sam/thruster_link:
+          Value: false
+        sam/thruster_yaw_link:
+          Value: false
+        sam/uw_gps_link:
+          Value: false
         tank_base:
-          Value: true
+          Value: false
+        thruster1:
+          Value: false
+        thruster2:
+          Value: false
+        thruster3:
+          Value: false
+        thruster4:
+          Value: false
+        thruster5:
+          Value: false
+        thruster6:
+          Value: false
+        thruster7:
+          Value: false
+        thruster8:
+          Value: false
         unity_origin:
           Value: false
         utm:
@@ -121,50 +184,53 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Tree:
-        unity_origin:
-          BlueROV2_Heavy/map:
-            BlueROV2_Heavy/odom:
-              BlueROV2_Heavy/base_link:
-                BlueROV2_Heavy/3d_sonar_link:
-                  {}
-                BlueROV2_Heavy/camera_tilt_link:
-                  BlueROV2_Heavy/camera_link:
-                    {}
-                BlueROV2_Heavy/prop_back_left_link:
-                  {}
-                BlueROV2_Heavy/prop_back_right_link:
-                  {}
-                BlueROV2_Heavy/prop_front_left_link:
-                  {}
-                BlueROV2_Heavy/prop_front_right_link:
-                  {}
-                BlueROV2_Heavy/prop_horizontal_back_left_link:
-                  {}
-                BlueROV2_Heavy/prop_horizontal_back_right_link:
-                  {}
-                BlueROV2_Heavy/prop_horizontal_front_left_link:
-                  {}
-                BlueROV2_Heavy/prop_horizontal_front_right_link:
-                  {}
-                BlueROV2_Heavy/prop_middle_left_link:
-                  {}
-                BlueROV2_Heavy/prop_middle_right_link:
-                  {}
-          KTHTank World/map:
-            KTHTank World/odom:
-              KTHTank World/base_link:
-                KTHTank World/mocap:
-                  {}
-                KTHTank World/tank_base:
-                  tank_base:
-                    mocap:
-                      map:
-                        {}
-                KTHTank World/target_hula:
-                  {}
         utm_34_V:
           utm:
-            {}
+            unity_origin:
+              BlueROV2_Heavy/map:
+                BlueROV2_Heavy/odom:
+                  BlueROV2_Heavy/base_link:
+                    BlueROV2_Heavy/3d_sonar_link:
+                      {}
+                    BlueROV2_Heavy/camera_tilt_link:
+                      BlueROV2_Heavy/camera_link:
+                        {}
+                    BlueROV2_Heavy/prop_back_left_link:
+                      {}
+                    BlueROV2_Heavy/prop_back_right_link:
+                      {}
+                    BlueROV2_Heavy/prop_front_left_link:
+                      {}
+                    BlueROV2_Heavy/prop_front_right_link:
+                      {}
+                    BlueROV2_Heavy/prop_horizontal_back_left_link:
+                      {}
+                    BlueROV2_Heavy/prop_horizontal_back_right_link:
+                      {}
+                    BlueROV2_Heavy/prop_horizontal_front_left_link:
+                      {}
+                    BlueROV2_Heavy/prop_horizontal_front_right_link:
+                      {}
+                    BlueROV2_Heavy/prop_middle_left_link:
+                      {}
+                    BlueROV2_Heavy/prop_middle_right_link:
+                      {}
+              KTHTank World/map:
+                KTHTank World/odom:
+                  KTHTank World/base_link:
+                    KTHTank World/miqus_camera:
+                      {}
+                    KTHTank World/mocap:
+                      {}
+                    KTHTank World/tank_base:
+                      tank_base:
+                        mocap:
+                          map:
+                            {}
+                          miqus_camera:
+                            {}
+                    KTHTank World/target_hula:
+                      {}
       Update Interval: 0
       Value: true
     - Angle Tolerance: 0.10000000149011612
@@ -553,7 +619,7 @@ Visualization Manager:
       Angular Color: 204; 204; 51
       Arrow Width: 0.5
       Class: rviz_default_plugins/TwistStamped
-      Enabled: true
+      Enabled: false
       Hide Small Values: false
       History Length: 1
       Linear Arrow Scale: 2
@@ -566,7 +632,7 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /mr_pinchy/cmd_vel
-      Value: true
+      Value: false
     - Alpha: 1
       Class: rviz_default_plugins/RobotModel
       Collision Enabled: false
@@ -613,7 +679,7 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 34
+      Max Intensity: 0
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: PointCloud2
@@ -632,6 +698,88 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
+    - Class: rviz_default_plugins/InteractiveMarkers
+      Enable Transparency: true
+      Enabled: true
+      Interactive Markers Namespace: /waypoint_nav
+      Name: Waypoints
+      Show Axes: false
+      Show Descriptions: true
+      Show Visual Aids: false
+      Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/RobotModel
+      Collision Enabled: false
+      Description File: ""
+      Description Source: Topic
+      Description Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /real_pinchy_description
+      Enabled: true
+      Links:
+        All Links Enabled: true
+        Expand Joint Details: false
+        Expand Link Details: false
+        Expand Tree: false
+        Link Tree Style: Links in Alphabetic Order
+        mr_pinchy/base_link_ekf_flu:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+      Mass Properties:
+        Inertia: false
+        Mass: false
+      Name: RobotModel
+      TF Prefix: ""
+      Update Interval: 0
+      Value: true
+      Visual Enabled: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /qualisys/camera_9/image_raw/compressed
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /BlueROV2_Heavy/camera/image_raw
+      Value: false
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /miqus/image_raw
+      Value: false
   Enabled: true
   Global Options:
     Background Color: 119; 118; 123
@@ -671,6 +819,10 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /clicked_point
+    - Class: bluerov_waypoint_rviz_plugin/WaypointNav
+      Depth: 0
+      Frame: tank_base
+      Topic: /bluerov/goal_pose
   Transformation:
     Current:
       Class: rviz_default_plugins/TF
@@ -678,33 +830,37 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 9.560285568237305
+      Distance: 13.266341209411621
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 3.8147764205932617
-        Y: 0.12463327497243881
-        Z: 1.4832453727722168
+        X: 4.727513790130615
+        Y: 0.4743373990058899
+        Z: -0.28096628189086914
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5697963237762451
+      Pitch: 0.7297947406768799
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz_default_plugins)
-      Yaw: 3.137407064437866
+      Yaw: 6.267415523529053
     Saved: ~
 Window Geometry:
-  Displays:
+  6-DOF Waypoints:
     collapsed: false
+  Displays:
+    collapsed: true
   Height: 1376
-  Hide Left Dock: false
+  Hide Left Dock: true
   Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd000000040000000000000194000004c2fc0200000008fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003d000004c2000000c900fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261000000010000010f000004c2fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073010000003d000004c2000000a400fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e1000001970000000300000a000000003efc0100000002fb0000000800540069006d0065010000000000000a00000002fb00fffffffb0000000800540069006d0065010000000000000450000000000000000000000751000004c200000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Image:
+    collapsed: false
+  QMainWindow State: 000000ff00000000fd00000004000000000000029e000004c2fc020000000cfb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073000000003d000004c2000000c900fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb0000000c00430061006d006500720061000000031f000000ec0000000000000000fb0000000a0049006d00610067006500000003cd000001320000002800fffffffb0000000a0049006d006100670065000000029d000002620000002800fffffffb0000000a0049006d006100670065000000035d000001a20000002800ffffff0000000100000152000004c2fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fc0000003d000004c2000001c80100001cfa000000000100000002fb0000001e0036002d0044004f004600200057006100790070006f0069006e007400730100000000ffffffff0000015200fffffffb0000000a0056006900650077007301000008f10000010f0000010000fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000005000000003efc0100000002fb0000000800540069006d0065010000000000000500000002fb00fffffffb0000000800540069006d00650100000000000004500000000000000000000003a8000004c200000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Time:
@@ -713,6 +869,6 @@ Window Geometry:
     collapsed: false
   Views:
     collapsed: false
-  Width: 2560
-  X: 0
+  Width: 1280
+  X: 1280
   Y: 27
